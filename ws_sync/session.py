@@ -1,6 +1,6 @@
 import traceback
 from typing import Callable
-from starlette import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .utils import nonblock_call
 
