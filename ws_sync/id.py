@@ -1,4 +1,4 @@
-from starlette import WebSocket
+from starlette.websockets import WebSocket
 
 
 async def get_user_session(ws: WebSocket):
