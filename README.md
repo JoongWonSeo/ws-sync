@@ -1,6 +1,6 @@
 # `ws-sync`: WebSocket Sync
 
-This library defines a very simple WebSocket and JSON & JSON Patch based protocol for keeping the python backend and the browser frontend in sync. There's a corresponding react library that implements the frontend side of the protocol.
+This library defines a very simple WebSocket and JSON & JSON Patch based protocol for keeping the python backend and the browser frontend in sync. There's a [corresponding react library](https://github.com/JoongWonSeo/ws-sync-react) that implements the frontend side of the protocol.
 
 ## Quickstart
 
