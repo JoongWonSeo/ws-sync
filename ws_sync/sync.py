@@ -205,7 +205,11 @@ class Sync:
         for key, value in self.state_snapshot.items():
             if self.expose_running_tasks and key == "runningTasks":
                 continue
-            setattr(self.obj, self.key_to_attr[key], deepcopy(value))
+            try:
+                setattr(self.obj, self.key_to_attr[key], deepcopy(value))
+            except AttributeError:
+                # attempting to set a property without a setter
+                pass
 
     @staticmethod
     def _create_action_handler(handlers: dict[str, Callable]):
