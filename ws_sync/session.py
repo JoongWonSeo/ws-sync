@@ -28,6 +28,7 @@ class Session:
         self.ws = None
         self.event_handlers: dict[str, Callable] = {}  # triggered on event
         self.init_handlers: list[Callable] = []  # triggered on connection init
+        self.logger = None
 
     @property
     def is_connected(self):
@@ -50,7 +51,8 @@ class Session:
     # ===== Low-Level: Networking =====#
     async def new_connection(self, ws: WebSocket):
         if self.ws is not None:
-            print("Warning: Overwriting existing websocket.")
+            if self.logger:
+                self.logger.warning("Overwriting existing websocket.")
             await self.disconnect()
         self.ws = ws
 
@@ -77,7 +79,8 @@ class Session:
         try:
             await self.ws.send_json({"type": event, "data": data})
         except Exception as e:
-            print(f"Error sending event {event}: {e}")
+            if self.logger:
+                self.logger.error(f"Error sending event {event}: {e}")
 
     async def handle_connection(self):
         assert self.ws is not None
@@ -87,15 +90,23 @@ class Session:
                 event = data.get("type")
                 if event in self.event_handlers:
                     # TODO: add support for task creation for long-running handlers
-                    print(f"Received event {event}: {data.get('data')}")
+                    if self.logger:
+                        self.logger.debug(f"Received event {event}: {data.get('data')}")
                     handler = self.event_handlers[event]
                     await nonblock_call(handler, data.get("data"))
                 else:
-                    print(f"Received event {event} but no subscriber was found.")
+                    if self.logger:
+                        self.logger.warning(
+                            f"Received event {event} but no subscriber was found."
+                        )
         except WebSocketDisconnect:
-            print("websocket disconnected")
+            if self.logger:
+                self.logger.info("websocket disconnected")
         except Exception:
-            print(f"Error while handling connection: {traceback.format_exc()}")
+            if self.logger:
+                self.logger.error(
+                    f"Error while handling connection: {traceback.format_exc()}"
+                )
         finally:
             try:
                 ws = self.ws

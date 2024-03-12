@@ -1,6 +1,9 @@
 import asyncio
-from typing import Callable
+from typing import Callable, Literal
 from copy import deepcopy
+from logging import Logger
+import warnings
+
 import jsonpatch
 from .session import Session, get_global_session
 
@@ -38,6 +41,8 @@ def task_cancel_event(key: str):
 
 # TODO: for key-space, global key prefix and context manager function in Sync
 
+ToastType = Literal["default", "message", "info", "success", "warning", "error"]
+
 
 class Sync:
     """
@@ -54,6 +59,7 @@ class Sync:
         on_task_cancel: dict[str, Callable] | None = None,
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
+        logger: Logger | None = None,
         **sync_attributes: dict[str, Ellipsis],
     ):
         """
@@ -73,12 +79,15 @@ class Sync:
         self.key = key
         self.obj = obj
         self.send_on_init = send_on_init
+        self.expose_running_tasks = expose_running_tasks
+        self.logger = logger
 
         # connection, usually from the "global provider", i.e. the context manager
         self.connection = connection or get_global_session()
         assert (
             self.connection is not None
         ), "No connection, either pass it as an argument or use the global connection using the context manager!"
+        self.connection.logger = self.logger
 
         # action handler
         if isinstance(on_action, dict):
@@ -120,8 +129,6 @@ class Sync:
                 and not isinstance(getattr(obj, attr), Sync)
             }
 
-        self.expose_running_tasks = expose_running_tasks
-
         # create reverse-lookup for patching
         self.key_to_attr = {key: attr for attr, key in self.sync_attributes.items()}
 
@@ -129,10 +136,11 @@ class Sync:
         assert (
             len(self.sync_attributes) + expose_running_tasks > 0
         ), "No attributes to sync"
-        print(f"{self.key}: Syncing {self.sync_attributes}")
+        if self.logger:
+            self.logger.info(f"{self.key}: Syncing {self.sync_attributes}")
         for key in self.sync_attributes.values():
             if "_" in key:
-                print(
+                logger(
                     f"[WARNING]: key {key} seems to be in snake_case, did you forget to convert it to CamelCase?"
                 )
 
@@ -218,7 +226,7 @@ class Sync:
             if action_type in handlers:
                 await handlers[action_type](**action)
             else:
-                print(f"Warning: No handler for action {type}")
+                warnings.warn(f"No handler for action {type}")
 
         return _handle_action
 
@@ -229,14 +237,18 @@ class Sync:
             try:
                 await task
             except asyncio.CancelledError:
-                print(f"Task {task_type} cancelled")
+                if self.logger:
+                    self.logger.info(f"Task {task_type} cancelled")
                 if on_cancel and task_type in on_cancel:
                     await on_cancel[task_type]()
                 raise
             finally:
                 self.running_tasks.pop(task_type, None)
                 if self.expose_running_tasks:
-                    print(f"syncing running tasks: {list(self.running_tasks.keys())}")
+                    if self.logger:
+                        self.logger.debug(
+                            f"syncing running tasks: {list(self.running_tasks.keys())}"
+                        )
                     await self.sync()
 
         async def _create_task(task: dict):
@@ -247,21 +259,24 @@ class Sync:
                     task = asyncio.create_task(_run_and_pop(todo, task_type))
                     self.running_tasks[task_type] = task
                     if self.expose_running_tasks:
-                        print(
-                            f"syncing running tasks: {list(self.running_tasks.keys())}"
-                        )
+                        if self.logger:
+                            self.logger.debug(
+                                f"syncing running tasks: {list(self.running_tasks.keys())}"
+                            )
                         await self.sync()
                 else:
-                    print(f"Warning: Task {task_type} already running")
+                    if self.logger:
+                        self.logger.warning(f"Task {task_type} already running")
             else:
-                print(f"Warning: No factory for task {task_type}")
+                warnings.warn(f"No factory for task {task_type}")
 
         async def _cancel_task(task: dict):
             task_type = task.pop("type")
             if task_type in self.running_tasks:
                 self.running_tasks[task_type].cancel()
             else:
-                print(f"Warning: Task {task_type} not running")
+                if self.logger:
+                    self.logger.warning(f"Task {task_type} not running")
 
         return _create_task, _cancel_task
 
@@ -293,11 +308,29 @@ class Sync:
         """
         await self.connection.send(action_event(self.key), action)
 
-    async def toast(self, *messages, type: str = "default") -> str:
+    async def toast(
+        self, *messages, type: ToastType = "default", logger: Logger | None = None
+    ) -> str:
         """
         Send a toast message to the frontend.
         Returns the sent message content, so that you can easily return or print it.
         """
+
         messages = " ".join(str(message) for message in messages)
+
+        if logger or self.logger:
+            logger = logger or self.logger
+            match type:
+                case "default":
+                    logger.debug(messages)
+                case "message" | "info" | "success":
+                    logger.info(messages)
+                case "warning":
+                    logger.warning(messages)
+                case "error":
+                    logger.error(messages)
+                case _:
+                    logger.debug(messages)
+
         await self.connection.send("_TOAST", {"type": type, "message": messages})
         return messages
