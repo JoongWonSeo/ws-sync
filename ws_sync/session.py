@@ -1,3 +1,4 @@
+from logging import Logger
 import traceback
 from typing import Callable
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -24,11 +25,11 @@ class Session:
     It defines a simple state-syncing protocol between the frontend and the backend, every event being of type {type: str, data: any}.
     """
 
-    def __init__(self):
+    def __init__(self, logger: Logger = None):
         self.ws = None
         self.event_handlers: dict[str, Callable] = {}  # triggered on event
         self.init_handlers: list[Callable] = []  # triggered on connection init
-        self.logger = None
+        self.logger = logger
 
     @property
     def is_connected(self):

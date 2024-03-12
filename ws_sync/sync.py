@@ -87,7 +87,6 @@ class Sync:
         assert (
             self.connection is not None
         ), "No connection, either pass it as an argument or use the global connection using the context manager!"
-        self.connection.logger = self.logger
 
         # action handler
         if isinstance(on_action, dict):
