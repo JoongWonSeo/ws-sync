@@ -1,10 +1,12 @@
 import asyncio
+import base64
+import warnings
 from typing import Callable, Literal
 from copy import deepcopy
 from logging import Logger
-import warnings
 
 import jsonpatch
+
 from .session import Session, get_global_session
 
 
@@ -39,6 +41,16 @@ def task_cancel_event(key: str):
     return f"_TASK_CANCEL:{key}"
 
 
+def toast_event():
+    """Toast message has been sent"""
+    return "_TOAST"
+
+
+def download_event():
+    """File has been sent for download"""
+    return "_DOWNLOAD"
+
+
 # TODO: for key-space, global key prefix and context manager function in Sync
 
 ToastType = Literal["default", "message", "info", "success", "warning", "error"]
@@ -53,7 +65,7 @@ class Sync:
         self,
         key: str,
         obj: object,
-        connection: Session | None = None,
+        session: Session | None = None,
         on_action: Callable | dict[str, Callable] | None = None,
         tasks: dict[str, Callable] | tuple[Callable, Callable] | None = None,
         on_task_cancel: dict[str, Callable] | None = None,
@@ -68,7 +80,7 @@ class Sync:
         Args:
             key: unique key for this object
             obj: the object whose attributes should be synced
-            connection: the connection to use, if None, use the global connection
+            session: the session to use, if None, use the global session
             on_action: either an action handler taking a single action dict, or a dict of action handlers for each action type, each taking the data of the action as keyword arguments
             tasks: either a dict of task factories for each task type, each returning a coroutine to be used as a task, or a tuple of (task_start_handler, task_cancel_handler)
             on_task_cancel: a dict of task cancel handlers for each task type
@@ -82,11 +94,11 @@ class Sync:
         self.expose_running_tasks = expose_running_tasks
         self.logger = logger
 
-        # connection, usually from the "global provider", i.e. the context manager
-        self.connection = connection or get_global_session()
+        # session, usually from the "global provider", i.e. the context manager
+        self.session = session or get_global_session()
         assert (
-            self.connection is not None
-        ), "No connection, either pass it as an argument or use the global connection using the context manager!"
+            self.session is not None
+        ), "No session, either pass it as an argument or use the global session using the context manager!"
 
         # action handler
         if isinstance(on_action, dict):
@@ -168,38 +180,36 @@ class Sync:
 
     # ===== Low-Level: Register Event Callbacks =====#
     def _register(self):
-        self.connection.register_event(get_event(self.key), self._send_state)
-        self.connection.register_event(set_event(self.key), self._set_state)
-        self.connection.register_event(patch_event(self.key), self._patch_state)
+        self.session.register_event(get_event(self.key), self._send_state)
+        self.session.register_event(set_event(self.key), self._set_state)
+        self.session.register_event(patch_event(self.key), self._patch_state)
         if self.send_on_init:
-            self.connection.register_init(self._send_state)
+            self.session.register_init(self._send_state)
         if self.on_action:
-            self.connection.register_event(action_event(self.key), self.on_action)
+            self.session.register_event(action_event(self.key), self.on_action)
         if self.on_task_start:
-            self.connection.register_event(
-                task_start_event(self.key), self.on_task_start
-            )
+            self.session.register_event(task_start_event(self.key), self.on_task_start)
         if self.on_task_cancel:
-            self.connection.register_event(
+            self.session.register_event(
                 task_cancel_event(self.key), self.on_task_cancel
             )
 
     def _deregister(self):
-        self.connection.deregister_event(get_event(self.key))
-        self.connection.deregister_event(set_event(self.key))
-        self.connection.deregister_event(patch_event(self.key))
+        self.session.deregister_event(get_event(self.key))
+        self.session.deregister_event(set_event(self.key))
+        self.session.deregister_event(patch_event(self.key))
         if self.send_on_init:
-            self.connection.init_handlers.remove(self._send_state)
+            self.session.init_handlers.remove(self._send_state)
         if self.on_action:
-            self.connection.deregister_event(action_event(self.key))
+            self.session.deregister_event(action_event(self.key))
         if self.on_task_start:
-            self.connection.deregister_event(task_start_event(self.key))
+            self.session.deregister_event(task_start_event(self.key))
         if self.on_task_cancel:
-            self.connection.deregister_event(task_cancel_event(self.key))
+            self.session.deregister_event(task_cancel_event(self.key))
 
     async def _send_state(self, _=None):
         self.state_snapshot = self._snapshot()
-        await self.connection.send(set_event(self.key), self.state_snapshot)
+        await self.session.send(set_event(self.key), self.state_snapshot)
 
     async def _set_state(self, new_state):
         for attr, value in new_state.items():
@@ -284,7 +294,7 @@ class Sync:
         """
         Sync all registered attributes.
         """
-        if not self.connection.is_connected:
+        if not self.session.is_connected:
             return
 
         # calculate patch
@@ -293,7 +303,7 @@ class Sync:
         patch = jsonpatch.make_patch(prev, self.state_snapshot).patch
 
         if len(patch) > 0:
-            await self.connection.send(patch_event(self.key), patch)
+            await self.session.send(patch_event(self.key), patch)
 
     async def __call__(self):
         """
@@ -305,7 +315,7 @@ class Sync:
         """
         Send an action to the frontend.
         """
-        await self.connection.send(action_event(self.key), action)
+        await self.session.send(action_event(self.key), action)
 
     async def toast(
         self, *messages, type: ToastType = "default", logger: Logger | None = None
@@ -331,5 +341,12 @@ class Sync:
                 case _:
                     logger.debug(messages)
 
-        await self.connection.send("_TOAST", {"type": type, "message": messages})
+        await self.session.send(toast_event(), {"type": type, "message": messages})
         return messages
+
+    async def download(self, filename: str, binary: bytes):
+        """
+        Send a file to the frontend for download.
+        """
+        data = base64.b64encode(binary).decode("utf-8")
+        await self.session.send(download_event(), {"filename": filename, "data": data})
