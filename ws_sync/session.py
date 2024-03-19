@@ -83,18 +83,36 @@ class Session:
             if self.logger:
                 self.logger.error(f"Error sending event {event}: {e}")
 
+    async def send_binary(self, event: str, metadata: dict[str, any], data: bytes):
+        if self.ws is None:
+            return
+        try:
+            await self.ws.send_json(
+                {"type": "_BIN_META", "data": {"type": event, "metadata": metadata}}
+            )
+            await self.ws.send_bytes(data)
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error sending binary event {event}: {e}")
+
     async def handle_connection(self):
         assert self.ws is not None
         try:
             while True:
-                data = await self.ws.receive_json()
-                event = data.get("type")
+                full_data = await self.ws.receive_json()
+                event = full_data.get("type")
+                data = full_data.get("data")
+
+                if event == "_BIN_META":
+                    # unwrap and construct the original event
+                    event = data.get("type")
+                    metadata = data.get("metadata")
+                    bindata = await self.ws.receive_bytes()
+                    data = {"data": bindata, **metadata}
+
                 if event in self.event_handlers:
-                    # TODO: add support for task creation for long-running handlers
-                    if self.logger:
-                        self.logger.debug(f"Received event {event}: {data.get('data')}")
                     handler = self.event_handlers[event]
-                    await nonblock_call(handler, data.get("data"))
+                    await nonblock_call(handler, data)
                 else:
                     if self.logger:
                         self.logger.warning(

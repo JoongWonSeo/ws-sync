@@ -254,10 +254,6 @@ class Sync:
             finally:
                 self.running_tasks.pop(task_type, None)
                 if self.expose_running_tasks:
-                    if self.logger:
-                        self.logger.debug(
-                            f"syncing running tasks: {list(self.running_tasks.keys())}"
-                        )
                     await self.sync()
 
         async def _create_task(task: dict):
@@ -268,10 +264,6 @@ class Sync:
                     task = asyncio.create_task(_run_and_pop(todo, task_type))
                     self.running_tasks[task_type] = task
                     if self.expose_running_tasks:
-                        if self.logger:
-                            self.logger.debug(
-                                f"syncing running tasks: {list(self.running_tasks.keys())}"
-                            )
                         await self.sync()
                 else:
                     if self.logger:
@@ -316,6 +308,13 @@ class Sync:
         Send an action to the frontend.
         """
         await self.session.send(action_event(self.key), action)
+
+    async def send_binary(self, metadata: dict[str, any], data: bytes):
+        """
+        Send binary data to the frontend, along with metadata.
+        This is a subset of an action, but with bytes data always included.
+        """
+        await self.session.send_binary(action_event(self.key), metadata, data)
 
     async def toast(
         self, *messages, type: ToastType = "default", logger: Logger | None = None
