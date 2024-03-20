@@ -151,7 +151,7 @@ class Sync:
             self.logger.info(f"{self.key}: Syncing {self.sync_attributes}")
         for key in self.sync_attributes.values():
             if "_" in key:
-                logger(
+                self.logger.warning(
                     f"[WARNING]: key {key} seems to be in snake_case, did you forget to convert it to CamelCase?"
                 )
 
@@ -297,11 +297,13 @@ class Sync:
         if len(patch) > 0:
             await self.session.send(patch_event(self.key), patch)
 
-    async def __call__(self):
+    async def __call__(self, toast: str = None, type: ToastType = "default"):
         """
         Sync all registered attributes.
         """
         await self.sync()
+        if toast:
+            await self.toast(toast, type=type)
 
     async def send_action(self, action: dict[str, any]):
         """
