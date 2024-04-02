@@ -294,11 +294,8 @@ class Sync:
         """
         if not self.session.is_connected:
             return
-        if (
-            if_since_last
-            and self._last_sync
-            and (t := time()) - self._last_sync < if_since_last
-        ):
+        t = time()
+        if if_since_last and self._last_sync and t - self._last_sync < if_since_last:
             return
 
         # calculate patch
