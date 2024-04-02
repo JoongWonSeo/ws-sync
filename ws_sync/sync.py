@@ -4,6 +4,7 @@ import warnings
 from typing import Callable, Literal
 from copy import deepcopy
 from logging import Logger
+from time import time
 
 import jsonpatch
 
@@ -155,6 +156,8 @@ class Sync:
                     f"[WARNING]: key {key} seems to be in snake_case, did you forget to convert it to CamelCase?"
                 )
 
+        self._last_sync = None
+
         # the snapshot is the exact state that the frontend has, so we can calculate the patch
         self.state_snapshot = self._snapshot()
 
@@ -235,7 +238,7 @@ class Sync:
             if action_type in handlers:
                 await handlers[action_type](**action)
             else:
-                warnings.warn(f"No handler for action {type}")
+                warnings.warn(f"No handler for action {action_type}")
 
         return _handle_action
 
@@ -282,11 +285,20 @@ class Sync:
         return _create_task, _cancel_task
 
     # ===== High-Level: Sync and Actions =====#
-    async def sync(self):
+    async def sync(self, if_since_last: float | None = None):
         """
         Sync all registered attributes.
+
+        Args:
+            if_since_last: only sync if the last sync was before this many seconds
         """
         if not self.session.is_connected:
+            return
+        if (
+            if_since_last
+            and self._last_sync
+            and (t := time()) - self._last_sync < if_since_last
+        ):
             return
 
         # calculate patch
@@ -296,12 +308,23 @@ class Sync:
 
         if len(patch) > 0:
             await self.session.send(patch_event(self.key), patch)
+            self._last_sync = t
 
-    async def __call__(self, toast: str = None, type: ToastType = "default"):
+    async def __call__(
+        self,
+        if_since_last: float | None = None,
+        toast: str = None,
+        type: ToastType = "default",
+    ):
         """
         Sync all registered attributes.
+
+        Args:
+            if_since_last: only sync if the last sync was before this many seconds
+            toast: toast message to send after syncing
+            type: toast type
         """
-        await self.sync()
+        await self.sync(if_since_last=if_since_last)
         if toast:
             await self.toast(toast, type=type)
 
