@@ -164,7 +164,7 @@ class Sync:
         self.camelize = toCamelCase
         self.send_on_init = send_on_init
         self.task_exposure = (
-            self.casing("running_task") if expose_running_tasks else None
+            self.casing("running_tasks") if expose_running_tasks else None
         )
         self.logger = logger
 
