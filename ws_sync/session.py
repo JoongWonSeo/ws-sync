@@ -130,12 +130,8 @@ class Session:
 
     # ===== High-Level: Context Manager =====#
     def __enter__(self):
-        global _global_session
-        self._prev_global_connection = _global_session
-        _global_session = self
+        session_context.set(self)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        global _global_session
-        _global_session = self._prev_global_connection
-        self._prev_global_connection = None
+        session_context.reset()
