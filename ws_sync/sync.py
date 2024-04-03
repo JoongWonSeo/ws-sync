@@ -63,6 +63,65 @@ class Sync:
     Register an object's attributes to this class to sync them with the frontend.
     """
 
+    @classmethod
+    def all(
+        cls,
+        obj: object,
+        key: str,
+        include: dict[str, Ellipsis] = {},
+        exclude: list[str] = [],
+        toCamelCase: bool = False,
+        send_on_init: bool = True,
+        expose_running_tasks: bool = False,
+        logger: Logger | None = None,
+        actions: dict[str, Callable] | None = None,
+        tasks: dict[str, Callable] | None = None,
+        task_cancels: dict[str, Callable] | None = None,
+    ):
+        return cls(
+            obj=obj,
+            key=key,
+            sync_all=True,
+            include=include,
+            exclude=exclude,
+            toCamelCase=toCamelCase,
+            send_on_init=send_on_init,
+            expose_running_tasks=expose_running_tasks,
+            logger=logger,
+            actions=actions,
+            tasks=tasks,
+            task_cancels=task_cancels,
+        )
+
+    @classmethod
+    def only(
+        cls,
+        _obj: object,
+        _key: str,
+        _toCamelCase: bool = False,
+        _send_on_init: bool = True,
+        _expose_running_tasks: bool = False,
+        _logger: Logger | None = None,
+        _actions: dict[str, Callable] | None = None,
+        _tasks: dict[str, Callable] | None = None,
+        _task_cancels: dict[str, Callable] | None = None,
+        **sync_attributes: dict[str, str],
+    ):
+        return cls(
+            obj=_obj,
+            key=_key,
+            sync_all=False,
+            include=sync_attributes,
+            exclude=[],
+            toCamelCase=_toCamelCase,
+            send_on_init=_send_on_init,
+            expose_running_tasks=_expose_running_tasks,
+            logger=_logger,
+            actions=_actions,
+            tasks=_tasks,
+            task_cancels=_task_cancels,
+        )
+
     def __init__(
         self,
         obj: object,
