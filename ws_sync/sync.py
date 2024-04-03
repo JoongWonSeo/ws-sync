@@ -8,7 +8,8 @@ from time import time
 
 import jsonpatch
 
-from .session import Session, get_global_session
+from .session import session_context
+from .utils import toCamelCase
 
 
 # Event Type Helpers
@@ -64,227 +65,139 @@ class Sync:
 
     def __init__(
         self,
-        key: str,
         obj: object,
-        session: Session | None = None,
-        on_action: Callable | dict[str, Callable] | None = None,
-        tasks: dict[str, Callable] | tuple[Callable, Callable] | None = None,
-        on_task_cancel: dict[str, Callable] | None = None,
+        key: str,
+        sync_all: bool = False,
+        include: dict[str, Ellipsis] = {},
+        exclude: list[str] = [],
+        toCamelCase: bool = False,
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
-        **sync_attributes: dict[str, Ellipsis],
+        actions: dict[str, Callable] | None = None,
+        tasks: dict[str, Callable] | None = None,
+        task_cancels: dict[str, Callable] | None = None,
     ):
         """
         Register the attributes that should be synced with the frontend.
 
         Args:
-            key: unique key for this object
             obj: the object whose attributes should be synced
-            session: the session to use, if None, use the global session
-            on_action: either an action handler taking a single action dict, or a dict of action handlers for each action type, each taking the data of the action as keyword arguments
-            tasks: either a dict of task factories for each task type, each returning a coroutine to be used as a task, or a tuple of (task_start_handler, task_cancel_handler)
-            on_task_cancel: a dict of task cancel handlers for each task type
+            key: unique key for this object
+
+            sync_all: whether to sync all non-private attributes
+            include: attribute names to sync, value being either ... or a string of the key of the attribute
+            exclude: list of attributes to exclude from syncing
+
+            toCamelCase: whether to convert attribute names to camelCase
             send_on_init: whether to send the state on connection init
             expose_running_tasks: whether to expose the running tasks to the frontend
-            sync_attributes: attribute names to observe, value being either ... or a string of the key of the attribute, leave empty to observe all attributes
+            logger: logger to use for logging
+
+            actions: action handlers for each action type, each taking the data of the action as keyword arguments
+            tasks: either a dict of task factories for each task type, each returning a coroutine to be used as a task, or a tuple of (task_start_handler, task_cancel_handler)
+            task_cancels: a dict of task cancel handlers for each task type
+
+
         """
-        self.key = key
         self.obj = obj
+        self.key = key
+        self.camelize = toCamelCase
         self.send_on_init = send_on_init
-        self.expose_running_tasks = expose_running_tasks
+        self.task_exposure = (
+            self.casing("running_task") if expose_running_tasks else None
+        )
         self.logger = logger
 
-        # session, usually from the "global provider", i.e. the context manager
-        self.session = session or get_global_session()
-        assert (
-            self.session is not None
-        ), "No session, either pass it as an argument or use the global session using the context manager!"
+        self.session = session_context.get()
+        assert self.session, "No session set, use the session.session_context variable!"
 
-        # action handler
-        if isinstance(on_action, dict):
-            self.on_action = self._create_action_handler(on_action)
-        else:
-            self.on_action = on_action
+        # ========== Find action handlers ========== #
+        actions = actions or {}
 
-        # task handler
-        self.running_tasks: dict[str, asyncio.Task] = {}
+        # find decorated actions
+        for attr in dir(obj):
+            action = getattr(obj, attr)
+            if callable(action) and hasattr(action, "remote_action"):
+                actions[action.remote_action] = action
+
+        self.actions = self._create_action_handler(actions)
+
+        # ========== Find task handlers ========== #
+        tasks = tasks or {}
+        task_cancels = task_cancels or {}
+
+        # find decorated tasks and cancel tasks
+        for attr in dir(obj):
+            task = getattr(obj, attr)
+            if callable(task):
+                if hasattr(task, "remote_task"):
+                    tasks[task.remote_task] = task
+                if hasattr(task, "remote_task_cancel"):
+                    task_cancels[task.remote_task_cancel] = task
+
         if tasks:
-            if type(tasks) is dict:
-                self.on_task_start, self.on_task_cancel = self._create_task_handlers(
-                    tasks, on_task_cancel
-                )
-            elif type(tasks) is tuple:
-                self.on_task_start, self.on_task_cancel = tasks
-            else:
-                raise Exception("Invalid tasks argument")
+            self.tasks, self.task_cancels = self._create_task_handlers(
+                tasks, task_cancels
+            )
         else:
-            self.on_task_start, self.on_task_cancel = None, None
+            self.tasks, self.task_cancels = None, None
 
-        # register attributes to sync
-        for attr in sync_attributes:
-            assert attr in dir(
-                obj
-            ), f"Failed to register attribute: Object has no attribute {attr}"
+        # store running tasks
+        self.running_tasks: dict[str, asyncio.Task] = {}
 
-        self.sync_attributes = {
-            attr: attr if key is ... else key for attr, key in sync_attributes.items()
-        }
+        # ========== Find attributes to sync ========== #
+        self.sync_attributes = {}
 
-        # if no attributes are specified, observe all non-private attributes
-        if len(self.sync_attributes) == 0:
-            self.sync_attributes = {
-                attr: attr
-                for attr in dir(obj)
-                if not attr.startswith("_")
-                and not callable(getattr(obj, attr))
-                and not isinstance(getattr(obj, attr), Sync)
-            }
+        # observe all non-private attributes
+        if sync_all:
+            for attr_name in dir(obj):
+                attr = getattr(obj, attr_name)
+                if (
+                    attr_name in exclude
+                    or attr_name.startswith("_")
+                    or callable(attr)
+                    or isinstance(attr, Sync)
+                ):
+                    continue
+
+                self.sync_attributes[attr_name] = self.casing(attr_name)
+
+        # observe specific attributes
+        for attr_name, sync_key in include.items():
+            self.sync_attributes[attr_name] = (
+                self.casing(attr_name) if sync_key is ... else sync_key
+            )
 
         # create reverse-lookup for patching
         self.key_to_attr = {key: attr for attr, key in self.sync_attributes.items()}
 
-        # assertions
+        # ========== Debugging ========== #
+        if self.logger:
+            self.logger.info(f"{self.key}: Syncing {self.sync_attributes}")
+            self.logger.info(f"{self.key}: Actions {actions}")
+            self.logger.info(f"{self.key}: Tasks {tasks}")
+            self.logger.info(f"{self.key}: Task Cancels {task_cancels}")
+
+        assert include.keys().isdisjoint(exclude), "Attribute in both include & exclude"
+        assert all(a in dir(obj) for a in self.sync_attributes), "Attribute not found"
+        assert all(e in dir(obj) for e in exclude), "Excluded attribute not found"
         assert (
             len(self.sync_attributes) + expose_running_tasks > 0
         ), "No attributes to sync"
-        if self.logger:
-            self.logger.info(f"{self.key}: Syncing {self.sync_attributes}")
-        for key in self.sync_attributes.values():
-            if "_" in key:
-                self.logger.warning(
-                    f"[WARNING]: key {key} seems to be in snake_case, did you forget to convert it to CamelCase?"
+        for attr in dir(obj):
+            if hasattr(getattr(obj, attr), "forgot_to_call"):
+                raise Exception(
+                    f'You did @remote_action instead of @remote_action(...) for attribute "{attr}"'
                 )
 
-        self._last_sync = None
-
-        # the snapshot is the exact state that the frontend has, so we can calculate the patch
+        # ========== State Management ========== #
+        # the snapshot is the exact state that the frontend has, for patching
         self.state_snapshot = self._snapshot()
+        self._last_sync = None  # timestamp of last sync
+        self._register_event_handlers()
 
-        self._register()
-
-    # ===== Low-Level: State Management =====#
-    def _snapshot(self):
-        return {
-            key: deepcopy(getattr(self.obj, attr))
-            for attr, key in self.sync_attributes.items()
-        } | (
-            {"runningTasks": list(self.running_tasks.keys())}
-            if self.expose_running_tasks
-            else {}
-        )
-
-    def observe(self, obj, **sync_attributes: dict[str, Ellipsis]):
-        """
-        Observe additional attributes, useful for when you're extending/subclassing an already Synced object, or when you want to observe multiple objects.
-        """
-        ...
-        # TODO: append, deregister, re-register
-
-    # ===== Low-Level: Register Event Callbacks =====#
-    def _register(self):
-        self.session.register_event(get_event(self.key), self._send_state)
-        self.session.register_event(set_event(self.key), self._set_state)
-        self.session.register_event(patch_event(self.key), self._patch_state)
-        if self.send_on_init:
-            self.session.register_init(self._send_state)
-        if self.on_action:
-            self.session.register_event(action_event(self.key), self.on_action)
-        if self.on_task_start:
-            self.session.register_event(task_start_event(self.key), self.on_task_start)
-        if self.on_task_cancel:
-            self.session.register_event(
-                task_cancel_event(self.key), self.on_task_cancel
-            )
-
-    def _deregister(self):
-        self.session.deregister_event(get_event(self.key))
-        self.session.deregister_event(set_event(self.key))
-        self.session.deregister_event(patch_event(self.key))
-        if self.send_on_init:
-            self.session.init_handlers.remove(self._send_state)
-        if self.on_action:
-            self.session.deregister_event(action_event(self.key))
-        if self.on_task_start:
-            self.session.deregister_event(task_start_event(self.key))
-        if self.on_task_cancel:
-            self.session.deregister_event(task_cancel_event(self.key))
-
-    async def _send_state(self, _=None):
-        self.state_snapshot = self._snapshot()
-        await self.session.send(set_event(self.key), self.state_snapshot)
-
-    async def _set_state(self, new_state):
-        for attr, value in new_state.items():
-            setattr(self.obj, attr, value)
-
-    async def _patch_state(self, patch):
-        self.state_snapshot = jsonpatch.apply_patch(
-            self.state_snapshot, patch, in_place=True
-        )
-        for key, value in self.state_snapshot.items():
-            if self.expose_running_tasks and key == "runningTasks":
-                continue
-            try:
-                setattr(self.obj, self.key_to_attr[key], deepcopy(value))
-            except AttributeError:
-                # attempting to set a property without a setter
-                pass
-
-    @staticmethod
-    def _create_action_handler(handlers: dict[str, Callable]):
-        async def _handle_action(action: dict):
-            action_type = action.pop("type")
-            if action_type in handlers:
-                await handlers[action_type](**action)
-            else:
-                warnings.warn(f"No handler for action {action_type}")
-
-        return _handle_action
-
-    def _create_task_handlers(
-        self, factories: dict[str, Callable], on_cancel: dict[str, Callable] | None
-    ):
-        async def _run_and_pop(task, task_type: str):
-            try:
-                await task
-            except asyncio.CancelledError:
-                if self.logger:
-                    self.logger.info(f"Task {task_type} cancelled")
-                if on_cancel and task_type in on_cancel:
-                    await on_cancel[task_type]()
-                raise
-            finally:
-                self.running_tasks.pop(task_type, None)
-                if self.expose_running_tasks:
-                    await self.sync()
-
-        async def _create_task(task: dict):
-            task_type = task.pop("type")
-            if task_type in factories:
-                if task_type not in self.running_tasks:
-                    todo = factories[task_type](**task)
-                    task = asyncio.create_task(_run_and_pop(todo, task_type))
-                    self.running_tasks[task_type] = task
-                    if self.expose_running_tasks:
-                        await self.sync()
-                else:
-                    if self.logger:
-                        self.logger.warning(f"Task {task_type} already running")
-            else:
-                warnings.warn(f"No factory for task {task_type}")
-
-        async def _cancel_task(task: dict):
-            task_type = task.pop("type")
-            if task_type in self.running_tasks:
-                self.running_tasks[task_type].cancel()
-            else:
-                if self.logger:
-                    self.logger.warning(f"Task {task_type} not running")
-
-        return _create_task, _cancel_task
-
-    # ===== High-Level: Sync and Actions =====#
+    # ========== High-Level: Sync and Actions ========== #
     async def sync(self, if_since_last: float | None = None):
         """
         Sync all registered attributes.
@@ -371,3 +284,126 @@ class Sync:
         """
         data = base64.b64encode(binary).decode("utf-8")
         await self.session.send(download_event(), {"filename": filename, "data": data})
+
+    def observe(self, obj, **sync_attributes: dict[str, Ellipsis]):
+        """
+        Observe additional attributes, useful for when you're extending/subclassing an already Synced object, or when you want to observe multiple objects.
+        """
+        ...
+        # TODO: append, deregister, re-register
+
+    # ========== Low-Level: State Management ========== #
+    def _snapshot(self):
+        return {
+            key: deepcopy(getattr(self.obj, attr))
+            for attr, key in self.sync_attributes.items()
+        } | (
+            {self.task_exposure: list(self.running_tasks.keys())}
+            if self.task_exposure
+            else {}
+        )
+
+    # ========== Low-Level: Register Event Callbacks ========== #
+    def _register_event_handlers(self):
+        self.session.register_event(get_event(self.key), self._send_state)
+        self.session.register_event(set_event(self.key), self._set_state)
+        self.session.register_event(patch_event(self.key), self._patch_state)
+        if self.send_on_init:
+            self.session.register_init(self._send_state)
+        if self.actions:
+            self.session.register_event(action_event(self.key), self.actions)
+        if self.tasks:
+            self.session.register_event(task_start_event(self.key), self.tasks)
+        if self.task_cancels:
+            self.session.register_event(task_cancel_event(self.key), self.task_cancels)
+
+    def _deregister(self):
+        self.session.deregister_event(get_event(self.key))
+        self.session.deregister_event(set_event(self.key))
+        self.session.deregister_event(patch_event(self.key))
+        if self.send_on_init:
+            self.session.init_handlers.remove(self._send_state)
+        if self.actions:
+            self.session.deregister_event(action_event(self.key))
+        if self.tasks:
+            self.session.deregister_event(task_start_event(self.key))
+        if self.task_cancels:
+            self.session.deregister_event(task_cancel_event(self.key))
+
+    async def _send_state(self, _=None):
+        self.state_snapshot = self._snapshot()
+        await self.session.send(set_event(self.key), self.state_snapshot)
+
+    async def _set_state(self, new_state):
+        for attr, value in new_state.items():
+            setattr(self.obj, attr, value)
+
+    async def _patch_state(self, patch):
+        self.state_snapshot = jsonpatch.apply_patch(
+            self.state_snapshot, patch, in_place=True
+        )
+        for key, value in self.state_snapshot.items():
+            if key == self.task_exposure:
+                continue
+            try:
+                setattr(self.obj, self.key_to_attr[key], deepcopy(value))
+            except AttributeError:
+                # attempting to set a property without a setter
+                pass
+
+    @staticmethod
+    def _create_action_handler(handlers: dict[str, Callable]):
+        async def _handle_action(action: dict):
+            action_type = action.pop("type")
+            if action_type in handlers:
+                await handlers[action_type](**action)
+            else:
+                warnings.warn(f"No handler for action {action_type}")
+
+        return _handle_action
+
+    def _create_task_handlers(
+        self, factories: dict[str, Callable], on_cancel: dict[str, Callable] | None
+    ):
+        async def _run_and_pop(task, task_type: str):
+            try:
+                await task
+            except asyncio.CancelledError:
+                if self.logger:
+                    self.logger.info(f"Task {task_type} cancelled")
+                if on_cancel and task_type in on_cancel:
+                    await on_cancel[task_type]()
+                raise
+            finally:
+                self.running_tasks.pop(task_type, None)
+                if self.task_exposure:
+                    await self.sync()
+
+        async def _create_task(task: dict):
+            task_type = task.pop("type")
+            if task_type in factories:
+                if task_type not in self.running_tasks:
+                    todo = factories[task_type](**task)
+                    task = asyncio.create_task(_run_and_pop(todo, task_type))
+                    self.running_tasks[task_type] = task
+                    if self.task_exposure:
+                        await self.sync()
+                else:
+                    if self.logger:
+                        self.logger.warning(f"Task {task_type} already running")
+            else:
+                warnings.warn(f"No factory for task {task_type}")
+
+        async def _cancel_task(task: dict):
+            task_type = task.pop("type")
+            if task_type in self.running_tasks:
+                self.running_tasks[task_type].cancel()
+            else:
+                if self.logger:
+                    self.logger.warning(f"Task {task_type} not running")
+
+        return _create_task, _cancel_task
+
+    # ========== Utils ========== #
+    def casing(self, attr: str):
+        return toCamelCase(attr) if self.camelize else attr

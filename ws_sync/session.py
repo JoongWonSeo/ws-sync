@@ -1,21 +1,15 @@
+from __future__ import annotations
 from logging import Logger
 import traceback
 from typing import Callable
+from contextvars import ContextVar
+
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .utils import nonblock_call
 
-# global default session, which can be temporarily overwritten by the context manager
-_global_session = None
-
-
-def get_global_session():
-    global _global_session
-    if _global_session is None:
-        raise Exception(
-            "No global session found. Please use the Session context manager."
-        )
-    return _global_session
+# session context
+session_context: ContextVar[Session] = ContextVar("session_context")
 
 
 class Session:
