@@ -176,6 +176,10 @@ class Sync:
 
         # find decorated actions
         for attr in dir(obj):
+            if isinstance(
+                getattr(type(obj), attr), property
+            ):  # ignore properties to prevent infinite recursion
+                continue
             action = getattr(obj, attr)
             if callable(action) and hasattr(action, "remote_action"):
                 actions[action.remote_action] = action
@@ -188,6 +192,10 @@ class Sync:
 
         # find decorated tasks and cancel tasks
         for attr in dir(obj):
+            if isinstance(
+                getattr(type(obj), attr), property
+            ):  # ignore properties to prevent infinite recursion
+                continue
             task = getattr(obj, attr)
             if callable(task):
                 if hasattr(task, "remote_task"):
