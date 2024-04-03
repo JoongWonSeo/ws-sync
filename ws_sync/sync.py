@@ -175,7 +175,7 @@ class Sync:
         actions = actions or {}
 
         # find decorated actions
-        for attr in dir(obj):
+        for attr in dir(type(obj)):
             if isinstance(
                 getattr(type(obj), attr), property
             ):  # ignore properties to prevent infinite recursion
@@ -191,7 +191,7 @@ class Sync:
         task_cancels = task_cancels or {}
 
         # find decorated tasks and cancel tasks
-        for attr in dir(obj):
+        for attr in dir(type(obj)):
             if isinstance(
                 getattr(type(obj), attr), property
             ):  # ignore properties to prevent infinite recursion
