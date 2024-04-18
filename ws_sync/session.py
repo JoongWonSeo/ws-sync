@@ -33,7 +33,9 @@ class Session:
     # ===== Low-Level: Register Event Callbacks =====#
     def register_event(self, event: str, callback: Callable):
         if event in self.event_handlers:
-            raise Exception(f"Event {event} already has a subscriber.")
+            # raise Exception(f"Event {event} already has a subscriber.")
+            if self.logger:
+                self.logger.warning(f"Event {event} already has a subscriber.")
         self.event_handlers[event] = callback
 
     def deregister_event(self, event: str):
