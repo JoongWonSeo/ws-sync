@@ -24,6 +24,7 @@ class Session:
         self.event_handlers: dict[str, Callable] = {}  # triggered on event
         self.init_handlers: list[Callable] = []  # triggered on connection init
         self.logger = logger
+        self.state = None  # user-assigned state associated with the session
 
     @property
     def is_connected(self):
