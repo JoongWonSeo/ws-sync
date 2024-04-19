@@ -241,10 +241,10 @@ class Sync:
 
         # ========== Debugging ========== #
         if self.logger:
-            self.logger.info(f"{self.key}: Syncing {self.sync_attributes}")
-            self.logger.info(f"{self.key}: Actions {actions}")
-            self.logger.info(f"{self.key}: Tasks {tasks}")
-            self.logger.info(f"{self.key}: Task Cancels {task_cancels}")
+            self.logger.debug(f"{self.key}: Syncing {self.sync_attributes}")
+            self.logger.debug(f"{self.key}: Actions {actions}")
+            self.logger.debug(f"{self.key}: Tasks {tasks}")
+            self.logger.debug(f"{self.key}: Task Cancels {task_cancels}")
 
         assert include.keys().isdisjoint(exclude), "Attribute in both include & exclude"
         assert all(a in dir(obj) for a in self.sync_attributes), "Attribute not found"
