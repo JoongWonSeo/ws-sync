@@ -133,8 +133,9 @@ class Session:
 
     # ===== High-Level: Context Manager =====#
     def __enter__(self):
-        session_context.set(self)
+        self.token = session_context.set(self)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        session_context.reset()
+        session_context.reset(self.token)
+        self.token = None
