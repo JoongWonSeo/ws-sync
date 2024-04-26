@@ -28,37 +28,35 @@ class Notes:
 To sync it to the frontend, it is as simple as:
 
 ```diff
-+from ws_sync import Sync
++from ws_sync import sync_all
 
 class Notes:
++   @sync_all("NOTES")  # create the sync object and define the key
     def __init__(self):
         # my attributes, as usual
         self.title = "My Notes"
         self.notes = []
 
-+       # create the sync object and define the key of the object
-+       self.sync = Sync("NOTES", self)
-    
     @property
     def total_length(self):
         return sum(len(note) for note in self.notes)
     
 +   async def rename(self, new_title):
         self.title = new_title
-+       await self.sync() # make sure the frontend knows about the change
++       await self.sync()  # make sure the frontend knows about the change
     
 +   async def add(self, note):
         self.notes.append(note)
-+       await self.sync() # make sure the frontend knows about the change
++       await self.sync()  # make sure the frontend knows about the change
 ```
 
 The `Sync("Notes", self)` call automatically detects the attributes to sync in `self`, which are all attributes or `@properties` that do not start with an underscore. You can also specify the attributes to sync manually:
 
 ```python
-self.sync = Sync("NOTES", self,
+@sync_only("NOTES",
     title = ...,
     notes = ...,
-    total_length = "totalLength",
+    total_length = "size",
 )
 ```
 
@@ -102,6 +100,8 @@ const Notes = () => {
     )
 }
 ```
+
+For more info on the react library, see [ws-sync-react](https://github.com/JoongWonSeo/ws-sync-react).
 
 ### Actions
 Actions are a way to call methods on the remote (action handlers), usually frontend -> backend.

@@ -50,23 +50,39 @@ class Notepad:
 More advanced example:
 ```python
 class Calendar:
-    @sync_only("CAL", current_day=..., length="size", _toCamelCase=True, _expose_running_tasks=True)
+    @sync_only(
+        "CAL",
+        current_day=...,
+        length="size",
+        _toCamelCase=True,
+        _expose_running_tasks=True,
+    )
     def __init__(self):
-        self.current_day = "monday"  # will be synced as "currentDay", since _toCamelCase=True
+        self.current_day = (
+            "monday"  # will be synced as "currentDay", since _toCamelCase=True
+        )
         self.length = 0  # will be synced as "size"
         self.private = None  # won't be synced, since not specified
 
     @remote_action("NEXT_DAY")
     async def next_day(self):
         self.current_day = "tuesday"
+        await self.sync()  # sync the state to update the frontend
 
     @remote_task("FAST_FORWARD")
     async def fast_forward(self):
         for i in range(100):
             self.length += 1
-            await self.sync(if_since_last=0.1)  # sync, but only if 0.1 seconds have passed since the last sync
-        await self.sync.toast("Fast forward complete!", )  # send a toast to the frontend
+            await self.sync(
+                if_since_last=0.1
+            )  # sync, but only if 0.1 seconds have passed since the last sync
+        await self.sync.toast(
+            "Fast forward complete!", type="success"
+        )  # send a toast to the frontend
 
+    @remote_action("IMPORT_EVENTS")
+    async def import_events(self, data: bytes):  # from `sendBinary` in the frontend
+        pickle.loads(data)  # do something with the data
 ```
 """
 
@@ -185,6 +201,15 @@ def sync_only(
 
 
 def remote_action(key: str):
+    """
+    Decorator for methods: Expose the method as an action to the frontend.
+    An action is a "synchronous" method that blocks the backend logic until it completes.
+    Of course, the method should be `async` to allow for non-blocking concurrency with other parallel sessions of the server.
+
+    Args:
+        key: unique key (matching the frontend key) to identify the action
+    """
+
     def decorator(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
@@ -198,6 +223,15 @@ def remote_action(key: str):
 
 
 def remote_task(key: str):
+    """
+    Decorator for methods: Expose the method as a long-running task to the frontend.
+    A task is a "non-blocking" method that runs concurrently with the backend logic.
+    The frontend can cancel the task at any time, so you should also implement a `@remote_task_cancel` method to cancel the task.
+
+    Args:
+        key: unique key (matching the frontend key) to identify the task
+    """
+
     def decorator(func):
         @wraps(func)
         async def wrapper(self, *args, **kwargs):
@@ -212,6 +246,22 @@ def remote_task(key: str):
 
 
 def remote_task_cancel(key: str):
+    """
+    Decorator for methods: Expose the method as a task-canceller to the frontend.
+    A task-canceller is a method that cancels a running task.
+    The method `f` decorated with `@remote_task` has a corresponding cancel decorator `@f.cancel`:
+    ```python
+    @remote_task("MY_TASK")
+    async def my_task(self): ...
+
+    @my_task.cancel
+    async def cancel_my_task(self): ...
+    ```
+
+    Args:
+        key: unique key (matching the frontend key) to identify the task
+    """
+
     def decorator(func):
         @wraps(func)
         async def wrapper(self, *args, **kwargs):

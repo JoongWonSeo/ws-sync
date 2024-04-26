@@ -3,22 +3,24 @@
 """
 
 __all__ = [
+    # submodules
     "decorators",
     "session",
-    "Session",
-    "session_context",
-    "Sync",
+    # decorators
     "sync",
     "sync_all",
     "sync_only",
     "remote_action",
     "remote_task",
     "remote_task_cancel",
+    # classes
+    "Sync",
+    "Session",
+    # globals
+    "session_context",
     "get_user_session",
 ]
 
-from .session import Session, session_context
-from .sync import Sync
 from .decorators import (
     sync,
     sync_all,
@@ -27,4 +29,6 @@ from .decorators import (
     remote_task,
     remote_task_cancel,
 )
+from .sync import Sync
+from .session import Session, session_context
 from .id import get_user_session
