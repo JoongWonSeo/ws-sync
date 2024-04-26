@@ -62,6 +62,8 @@ The `Sync("Notes", self)` call automatically detects the attributes to sync in `
 
 The keyword argument is the local name of the attribute, the value is the name of the attribute in the frontend. If the value is `...`, the local and frontend name are the same. This is useful if you want to rename an attribute in the frontend without changing the name in the backend (e.g. snake_case to camelCase).
 
+For more info on the options and examples, see [ws_sync.decorators docs](https://joongwonseo.github.io/ws-sync/ws_sync/decorators.html).
+
 #### Frontend
 On the frontend, you can use the `useSynced` hook to sync the state to the backend:
 
