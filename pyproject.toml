@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.8"
-starlette = "^0.35.1"
+starlette = "^0.37.2"
 jsonpatch = "^1.33"
 
 
