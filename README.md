@@ -65,11 +65,11 @@ self.sync = Sync("NOTES", self,
 The keyword argument is the local name of the attribute, the value is the name of the attribute in the frontend. If the value is `...`, the local and frontend name are the same. This is useful if you want to rename an attribute in the frontend without changing the name in the backend (e.g. snake_case to camelCase).
 
 #### Frontend
-On the frontend, you can use the `useSync` hook to sync the state to the backend:
+On the frontend, you can use the `useSynced` hook to sync the state to the backend:
 
 ```jsx
 const Notes = () => {
-    const notes = useSync("NOTES", {
+    const notes = useSynced("NOTES", {
         title: "",
         notes: [],
     })
@@ -83,13 +83,13 @@ const Notes = () => {
 }
 ```
 
-The second parameter of `useSync` is the initial state.
+The second parameter of `useSynced` is the initial state.
 
 The returned `notes` object not only contains the state, but also the setters and syncers:
 
 ```jsx
 const Notes = () => {
-    const notes = useSync("NOTES", {
+    const notes = useSynced("NOTES", {
         title: "",
         notes: [],
     })

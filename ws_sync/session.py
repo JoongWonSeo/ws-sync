@@ -10,6 +10,7 @@ from .utils import nonblock_call
 
 # session context
 session_context: ContextVar[Session] = ContextVar("session_context")
+"""Per-task session context. Within concurrent async tasks, this context variable can be used to access the current Session object."""
 
 
 class Session:

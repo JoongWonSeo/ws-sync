@@ -1,4 +1,10 @@
+"""
+.. include:: ../README.md
+"""
+
 __all__ = [
+    "decorators",
+    "session",
     "Session",
     "session_context",
     "Sync",

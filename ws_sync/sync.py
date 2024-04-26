@@ -293,7 +293,7 @@ class Sync:
         toast: str = None,
         type: ToastType = "default",
     ):
-        """
+        """@public
         Sync all registered attributes.
 
         Args:
