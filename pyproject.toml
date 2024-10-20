@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "ws-sync"
-version = "0.6.3"
+version = "0.6.5"
 description = "Keep objects synchronized over a persistent WebSocket session"
 authors = ["Joong-Won Seo <joong.won.seo@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.8"
-starlette = "^0.37.2"
+starlette = ">=0.37.2"
 jsonpatch = "^1.33"
 
 

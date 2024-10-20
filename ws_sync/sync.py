@@ -48,6 +48,7 @@ def toast_event():
     return "_TOAST"
 
 
+# FIXME: OBSOLETE
 def download_event():
     """File has been sent for download"""
     return "_DOWNLOAD"
@@ -249,9 +250,9 @@ class Sync:
         assert include.keys().isdisjoint(exclude), "Attribute in both include & exclude"
         assert all(a in dir(obj) for a in self.sync_attributes), "Attribute not found"
         assert all(e in dir(obj) for e in exclude), "Excluded attribute not found"
-        assert (
-            len(self.sync_attributes) + expose_running_tasks > 0
-        ), "No attributes to sync"
+        # assert (
+        #     len(self.sync_attributes) + expose_running_tasks > 0
+        # ), "No attributes to sync"
         for attr in dir(obj):
             if hasattr(getattr(obj, attr), "forgot_to_call"):
                 raise Exception(
