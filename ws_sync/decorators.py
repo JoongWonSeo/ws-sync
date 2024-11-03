@@ -88,6 +88,7 @@ class Calendar:
 
 from logging import Logger
 from functools import wraps
+from types import EllipsisType
 
 from .sync import Sync
 
@@ -95,7 +96,7 @@ from .sync import Sync
 def sync(
     key: str,
     sync_all: bool = False,
-    include: dict[str, Ellipsis] = {},
+    include: dict[str, str | EllipsisType] = {},
     exclude: list[str] = [],
     toCamelCase: bool = False,
     send_on_init: bool = True,
@@ -138,7 +139,7 @@ def sync(
 
 def sync_all(
     key: str,
-    include: dict[str, Ellipsis] = {},
+    include: dict[str, str | EllipsisType] = {},
     exclude: list[str] = [],
     toCamelCase: bool = False,
     send_on_init: bool = True,
@@ -175,7 +176,7 @@ def sync_only(
     _send_on_init: bool = True,
     _expose_running_tasks: bool = False,
     _logger: Logger | None = None,
-    **sync_attributes: dict[str, str],
+    **sync_attributes: str | EllipsisType,
 ):
     """
     Decorator for `__init__()`: Register only the keyword-specified attributes to be synced with the frontend.
@@ -215,7 +216,7 @@ def remote_action(key: str):
         def wrapper(self, *args, **kwargs):
             return func(self, *args, **kwargs)
 
-        wrapper.remote_action = key
+        wrapper.remote_action = key  # type: ignore
         return wrapper
 
     decorator.forgot_to_call = True
@@ -237,8 +238,8 @@ def remote_task(key: str):
         async def wrapper(self, *args, **kwargs):
             return await func(self, *args, **kwargs)
 
-        wrapper.remote_task = key
-        wrapper.cancel = remote_task_cancel(key)  # syntactic sugar
+        wrapper.remote_task = key  # type: ignore
+        wrapper.cancel = remote_task_cancel(key)  # type: ignore # syntactic sugar
         return wrapper
 
     decorator.forgot_to_call = True
@@ -267,7 +268,7 @@ def remote_task_cancel(key: str):
         async def wrapper(self, *args, **kwargs):
             return await func(self, *args, **kwargs)
 
-        wrapper.remote_task_cancel = key
+        wrapper.remote_task_cancel = key  # type: ignore
         return wrapper
 
     decorator.forgot_to_call = True

@@ -1,7 +1,7 @@
 from starlette.websockets import WebSocket
 
 
-async def get_user_session(ws: WebSocket) -> tuple[str, str]:
+async def get_user_session(ws: WebSocket) -> tuple[str, str] | tuple[None, None]:
     """
     A primitive WS user+session identification protocol.
     So that the `Session` state can persist across reconnections/tabs/etc., the client sends their user_id and session_id to the server.
@@ -10,7 +10,7 @@ async def get_user_session(ws: WebSocket) -> tuple[str, str]:
         ws: the websocket
 
     Returns:
-        tuple[str, str]: the user_id and session_id
+        the user_id and session_id or None, None if the client sent invalid data
     """
     try:
         await ws.send_json({"type": "_REQUEST_USER_SESSION"})
@@ -24,7 +24,7 @@ async def get_user_session(ws: WebSocket) -> tuple[str, str]:
             raise Exception("Client sent invalid user or session")
 
         return user, session
-    except:
+    except Exception:
         try:
             await ws.close()
         finally:

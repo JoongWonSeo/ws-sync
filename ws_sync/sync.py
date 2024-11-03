@@ -1,7 +1,8 @@
 import asyncio
 import base64
+from types import EllipsisType
 import warnings
-from typing import Callable, Literal
+from typing import Any, Awaitable, Callable, Literal
 from copy import deepcopy
 from logging import Logger
 from time import time
@@ -69,7 +70,7 @@ class Sync:
         cls,
         obj: object,
         key: str,
-        include: dict[str, Ellipsis] = {},
+        include: dict[str, str | EllipsisType] = {},
         exclude: list[str] = [],
         toCamelCase: bool = False,
         send_on_init: bool = True,
@@ -106,7 +107,7 @@ class Sync:
         _actions: dict[str, Callable] | None = None,
         _tasks: dict[str, Callable] | None = None,
         _task_cancels: dict[str, Callable] | None = None,
-        **sync_attributes: dict[str, str],
+        **sync_attributes: str | EllipsisType,
     ):
         return cls(
             obj=_obj,
@@ -128,7 +129,7 @@ class Sync:
         obj: object,
         key: str,
         sync_all: bool = False,
-        include: dict[str, Ellipsis] = {},
+        include: dict[str, str | EllipsisType] = {},
         exclude: list[str] = [],
         toCamelCase: bool = False,
         send_on_init: bool = True,
@@ -291,7 +292,7 @@ class Sync:
     async def __call__(
         self,
         if_since_last: float | None = None,
-        toast: str = None,
+        toast: str | None = None,
         type: ToastType = "default",
     ):
         """@public
@@ -306,13 +307,13 @@ class Sync:
         if toast:
             await self.toast(toast, type=type)
 
-    async def send_action(self, action: dict[str, any]):
+    async def send_action(self, action: dict[str, Any]):
         """
         Send an action to the frontend.
         """
         await self.session.send(action_event(self.key), action)
 
-    async def send_binary(self, metadata: dict[str, any], data: bytes):
+    async def send_binary(self, metadata: dict[str, Any], data: bytes):
         """
         Send binary data to the frontend, along with metadata.
         This is a subset of an action, but with bytes data always included.
@@ -329,19 +330,18 @@ class Sync:
 
         messages = " ".join(str(message) for message in messages)
 
-        if logger or self.logger:
-            logger = logger or self.logger
+        if lg := (logger or self.logger):
             match type:
                 case "default":
-                    logger.debug(messages)
+                    lg.debug(messages)
                 case "message" | "info" | "success":
-                    logger.info(messages)
+                    lg.info(messages)
                 case "warning":
-                    logger.warning(messages)
+                    lg.warning(messages)
                 case "error":
-                    logger.error(messages)
+                    lg.error(messages)
                 case _:
-                    logger.debug(messages)
+                    lg.debug(messages)
 
         await self.session.send(toast_event(), {"type": type, "message": messages})
         return messages
@@ -353,7 +353,7 @@ class Sync:
         data = base64.b64encode(binary).decode("utf-8")
         await self.session.send(download_event(), {"filename": filename, "data": data})
 
-    def observe(self, obj, **sync_attributes: dict[str, Ellipsis]):
+    def observe(self, obj, **sync_attributes: dict[str, str | EllipsisType]):
         """
         Observe additional attributes, useful for when you're extending/subclassing an already Synced object, or when you want to observe multiple objects.
         """
@@ -433,7 +433,7 @@ class Sync:
     def _create_task_handlers(
         self, factories: dict[str, Callable], on_cancel: dict[str, Callable] | None
     ):
-        async def _run_and_pop(task, task_type: str):
+        async def _run_and_pop(task: Awaitable, task_type: str):
             try:
                 await task
             except asyncio.CancelledError:
@@ -447,11 +447,11 @@ class Sync:
                 if self.task_exposure:
                     await self.sync()
 
-        async def _create_task(task: dict):
-            task_type = task.pop("type")
+        async def _create_task(task_args: dict):
+            task_type = task_args.pop("type")
             if task_type in factories:
                 if task_type not in self.running_tasks:
-                    todo = factories[task_type](**task)
+                    todo = factories[task_type](**task_args)
                     task = asyncio.create_task(_run_and_pop(todo, task_type))
                     self.running_tasks[task_type] = task
                     if self.task_exposure:
@@ -462,8 +462,8 @@ class Sync:
             else:
                 warnings.warn(f"No factory for task {task_type}")
 
-        async def _cancel_task(task: dict):
-            task_type = task.pop("type")
+        async def _cancel_task(task_args: dict):
+            task_type = task_args.pop("type")
             if task_type in self.running_tasks:
                 self.running_tasks[task_type].cancel()
             else:
