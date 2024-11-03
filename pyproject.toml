@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ws-sync"
-version = "0.6.6"
+version = "0.6.7"
 description = "Keep objects synchronized over a persistent WebSocket session"
 authors = ["Joong-Won Seo <joong.won.seo@gmail.com>"]
 readme = "README.md"
