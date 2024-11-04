@@ -76,7 +76,10 @@ class Session:
         if self.ws is None:
             return
         await self.send("_DISCONNECT", message)
-        await self.ws.close()
+        try:
+            await self.ws.close()
+        except Exception:
+            pass
         self.ws = None
 
     async def init(self):
