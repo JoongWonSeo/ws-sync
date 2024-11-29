@@ -1,5 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from asyncio import Lock
 from logging import Logger
 import traceback
 from typing import Any, Callable
@@ -23,6 +24,7 @@ class Session:
 
     def __init__(self, logger: Logger | None = None):
         self.ws = None
+        self.ws_lock = Lock()  # when multiple clients try to connect at the same time, we need to ensure that only one connection is established
         self.event_handlers: dict[str, Callable] = {}  # triggered on event
         self.init_handlers: list[Callable] = []  # triggered on connection init
         self.logger = logger
@@ -54,11 +56,17 @@ class Session:
         """
         Set the new ws connection while possibly gracefully disconnecting the old one.
         """
-        if self.ws is not None:
-            if self.logger:
-                self.logger.warning("Overwriting existing websocket.")
-            await self.disconnect()
-        self.ws = ws
+        async with self.ws_lock:
+            if self.ws is not None:
+                if self.logger:
+                    self.logger.warning(
+                        f"Overwriting existing websocket {self.ws.client} with {ws.client})"
+                    )
+                await self.disconnect()
+            self.ws = ws
+
+        if self.ws.application_state == WebSocketState.CONNECTING:
+            await self.ws.accept()
 
         await self.init()
 
@@ -118,9 +126,6 @@ class Session:
             await self.new_connection(ws)
 
         assert self.ws is not None
-
-        if self.ws.application_state == WebSocketState.CONNECTING:
-            await self.ws.accept()
 
         with self:  # provide the session context
             try:
