@@ -1,10 +1,11 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
-from asyncio import Lock
-from logging import Logger
+
 import traceback
-from typing import Any, Callable
+from abc import ABC
+from asyncio import Lock
 from contextvars import ContextVar
+from logging import Logger
+from typing import Any, Callable
 
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
@@ -197,12 +198,14 @@ class SessionState(ABC):
     Abstract base class for user-defined session state objects that can be associated with a Session object.
     """
 
-    @abstractmethod
     async def on_connect(self):
         """Called after the websocket connection is established."""
         pass
 
-    @abstractmethod
     async def on_disconnect(self):
         """Called after the websocket connection is closed."""
+        pass
+
+    async def on_terminate(self):
+        """Called when the session is forcefully terminated by the server."""
         pass
