@@ -6,7 +6,7 @@ authors = ["Joong-Won Seo <joong.won.seo@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.12"
 starlette = ">=0.37.2"
 jsonpatch = "^1.33"
 pydantic = "^2"
@@ -20,3 +20,31 @@ ipykernel = "^6.29.5"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle
+    "F",     # pyflakes
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "I",     # isort
+    "ASYNC", # flake8-async
+]
+extend-safe-fixes = ["UP"]
+ignore = [
+    "E501",   # line too long (formatter takes care of this, prompt strings have to be long)
+    "E741",   # variable names l and O are forbidden
+    "E402",   # module level import not at top of file
+    "B027",   # empty method without abstract decorator
+    "B028",   # no explicit stacklevel keyword argument in warnings
+    "SIM102", # Combine nested ifs
+]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import traceback
-from abc import ABC
 from asyncio import Lock
+from collections.abc import Callable
+from contextlib import suppress
 from contextvars import ContextVar
 from logging import Logger
-from typing import Any, Callable
+from typing import Any
 
-from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
+from starlette.websockets import (  # type: ignore[reportMissingImports]
+    WebSocket,
+    WebSocketDisconnect,
+    WebSocketState,
+)
 
 from .utils import nonblock_call
 
@@ -85,10 +90,9 @@ class Session:
         if self.ws is None:
             return
         await self.send("_DISCONNECT", message)
-        try:
+        assert self.ws is not None
+        with suppress(Exception):
             await self.ws.close()
-        except Exception:
-            pass
         self.ws = None
 
     async def init(self):
@@ -178,7 +182,8 @@ class Session:
                 try:
                     ws = self.ws
                     self.ws = None
-                    await ws.close()
+                    if ws is not None:
+                        await ws.close()
                 except Exception:
                     pass  # ignore errors during closing
 
@@ -193,7 +198,7 @@ class Session:
         self.token = None
 
 
-class SessionState(ABC):
+class SessionState:
     """
     Abstract base class for user-defined session state objects that can be associated with a Session object.
     """
