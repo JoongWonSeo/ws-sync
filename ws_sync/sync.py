@@ -9,7 +9,7 @@ from types import EllipsisType
 from typing import Any, Literal, get_type_hints
 
 import jsonpatch
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from .session import session_context
 from .utils import toCamelCase
@@ -231,20 +231,24 @@ class Sync:
 
         # observe all non-private attributes
         if sync_all:
-            for attr_name in dir(obj):
-                try:
-                    attr = getattr(obj, attr_name)
-                except AttributeError:
-                    continue
-                if (
-                    attr_name in exclude
-                    or attr_name.startswith("_")
-                    or callable(attr)
-                    or isinstance(attr, Sync)
-                ):
-                    continue
+            if isinstance(obj, BaseModel):
+                for field in type(obj).model_fields:
+                    self.sync_attributes[field] = self.casing(field)
+            else:
+                for attr_name in dir(obj):
+                    try:
+                        attr = getattr(obj, attr_name)
+                    except AttributeError:
+                        continue
+                    if (
+                        attr_name in exclude
+                        or attr_name.startswith("_")
+                        or callable(attr)
+                        or isinstance(attr, Sync)
+                    ):
+                        continue
 
-                self.sync_attributes[attr_name] = self.casing(attr_name)
+                    self.sync_attributes[attr_name] = self.casing(attr_name)
 
         # observe specific attributes
         for attr_name, sync_key in include.items():
