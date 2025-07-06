@@ -81,6 +81,7 @@ class TestPydanticSync:
 
         class UserContainer:
             sync: Sync
+            user: User  # Class-level annotation
 
             @sync_all("USER_CONTAINER")
             def __init__(self, user: User):
@@ -100,6 +101,7 @@ class TestPydanticSync:
 
         class UserListContainer:
             sync: Sync
+            users: list[User]  # Class-level annotation
 
             @sync_all("USER_LIST")
             def __init__(self):
@@ -121,6 +123,7 @@ class TestPydanticSync:
 
         class UserDictContainer:
             sync: Sync
+            users: dict[str, User]  # Class-level annotation
 
             @sync_all("USER_DICT")
             def __init__(self):
@@ -143,6 +146,7 @@ class TestPydanticSync:
 
         class TeamContainer:
             sync: Sync
+            team: Team  # Class-level annotation
 
             @sync_all("TEAM_CONTAINER")
             def __init__(self, team: Team):
@@ -164,6 +168,7 @@ class TestPydanticSync:
 
         class CompanyContainer:
             sync: Sync
+            company: Company  # Class-level annotation
 
             @sync_all("COMPANY")
             def __init__(self, company: Company):
@@ -291,6 +296,9 @@ class TestPydanticSync:
 
         class MixedContainer:
             sync: Sync
+            user: User
+            count: int
+            title: str
 
             @sync_all("MIXED")
             def __init__(self):
@@ -315,6 +323,8 @@ class TestPydanticSync:
 
         class SelectiveContainer:
             sync: Sync
+            user: User
+            count: int
 
             @sync_only("SELECTIVE", user=..., count=...)
             def __init__(self):
@@ -336,6 +346,8 @@ class TestPydanticSync:
 
         class CamelCaseContainer:
             sync: Sync
+            user_profile: User
+            user_count: int
 
             @sync_all("CAMEL_CASE", toCamelCase=True)
             def __init__(self):

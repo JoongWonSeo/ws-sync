@@ -87,7 +87,6 @@ pre-commit install
 **Utilities** (`utils.py`):
 - `nonblock_call()`: Async wrapper for sync/async functions
 - `toCamelCase()`: Convert snake_case to camelCase
-- `ensure_jsonable()`: Convert objects to JSON-serializable format
 
 **User Identification** (`id.py`):
 - `get_user_session()`: Protocol for identifying users across reconnections
@@ -107,6 +106,7 @@ The library implements a simple event-based protocol:
 3. **Reconnection Handling**: Sessions persist across WebSocket disconnections
 4. **Concurrent Tasks**: Support for long-running, cancellable operations
 5. **Type-Safe Integration**: Full support for typed Python objects using Pydantic's TypeAdapter
+   - **Class-level annotations required**: Use `class MyClass:` followed by `attr: Type` annotations
    - Pydantic BaseModel support with validation
    - TypedDict support for structured dictionaries  
    - `List[Type]` and `Dict[str, Type]` support for any type
@@ -202,6 +202,19 @@ The library uses Pydantic's `TypeAdapter` for all type validation and conversion
 - Validation of complex nested structures
 - Support for any Python type annotation including TypedDict, dataclasses, and custom types
 - Consistent serialization/deserialization behavior
+
+**Important**: TypeAdapters are only created for attributes with **class-level type annotations**. Instance-level annotations (e.g., `self.attr: Type = value` in `__init__`) are ignored. Always use class-level annotations:
+
+```python
+class MyClass:
+    # ✅ Correct - class-level annotation
+    my_attr: MyType
+    
+    @sync_all("KEY")
+    def __init__(self):
+        # ❌ This annotation is ignored
+        self.my_attr: MyType = some_value
+```
 
 ### Performance Optimizations
 

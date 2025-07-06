@@ -12,7 +12,7 @@ import jsonpatch
 from pydantic import TypeAdapter
 
 from .session import session_context
-from .utils import ensure_jsonable, toCamelCase
+from .utils import toCamelCase
 
 
 # Event Type Helpers
@@ -389,14 +389,21 @@ class Sync:
 
     # ========== Low-Level: State Management ========== #
     def _snapshot(self) -> dict[str, Any]:
-        return {
-            key: deepcopy(ensure_jsonable(getattr(self.obj, attr)))
-            for attr, key in self.sync_attributes.items()
-        } | (
-            {self.task_exposure: list(self.running_tasks.keys())}
-            if self.task_exposure
-            else {}
-        )
+        result = {}
+        for attr, key in self.sync_attributes.items():
+            value = getattr(self.obj, attr)
+            if attr in self.type_adapters:
+                # Use TypeAdapter to serialize with warnings disabled
+                result[key] = self.type_adapters[attr].dump_python(
+                    value, warnings=False
+                )
+            else:
+                result[key] = deepcopy(value)
+
+        if self.task_exposure:
+            result[self.task_exposure] = list(self.running_tasks.keys())
+
+        return result
 
     # ========== Low-Level: Register Event Callbacks ========== #
     def _register_event_handlers(self):
