@@ -411,7 +411,7 @@ class Sync:
             if attr in self.type_adapters:
                 # Use TypeAdapter to serialize with warnings disabled
                 result[key] = self.type_adapters[attr].dump_python(
-                    value, warnings=False
+                    value, mode="json", warnings=False
                 )
             else:
                 result[key] = deepcopy(value)
