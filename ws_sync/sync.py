@@ -78,10 +78,10 @@ class Sync:
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
-        actions: dict[str, Callable] | None = None,
-        tasks: dict[str, Callable] | None = None,
-        task_cancels: dict[str, Callable] | None = None,
-    ):
+        actions: dict[str, Callable[..., Any]] | None = None,
+        tasks: dict[str, Callable[..., Awaitable[Any]]] | None = None,
+        task_cancels: dict[str, Callable[..., Awaitable[Any]]] | None = None,
+    ) -> "Sync":
         return cls(
             obj=obj,
             key=key,
@@ -106,11 +106,11 @@ class Sync:
         _send_on_init: bool = True,
         _expose_running_tasks: bool = False,
         _logger: Logger | None = None,
-        _actions: dict[str, Callable] | None = None,
-        _tasks: dict[str, Callable] | None = None,
-        _task_cancels: dict[str, Callable] | None = None,
+        _actions: dict[str, Callable[..., Any]] | None = None,
+        _tasks: dict[str, Callable[..., Awaitable[Any]]] | None = None,
+        _task_cancels: dict[str, Callable[..., Awaitable[Any]]] | None = None,
         **sync_attributes: str | EllipsisType,
-    ):
+    ) -> "Sync":
         return cls(
             obj=_obj,
             key=_key,
@@ -137,9 +137,9 @@ class Sync:
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
-        actions: dict[str, Callable] | None = None,
-        tasks: dict[str, Callable] | None = None,
-        task_cancels: dict[str, Callable] | None = None,
+        actions: dict[str, Callable[..., Any]] | None = None,
+        tasks: dict[str, Callable[..., Awaitable[Any]]] | None = None,
+        task_cancels: dict[str, Callable[..., Awaitable[Any]]] | None = None,
     ):
         """
         Register the attributes that should be synced with the frontend.
@@ -218,7 +218,7 @@ class Sync:
             self.tasks, self.task_cancels = None, None
 
         # store running tasks
-        self.running_tasks: dict[str, asyncio.Task] = {}
+        self.running_tasks: dict[str, asyncio.Task[Any]] = {}
 
         # ========== Find attributes to sync ========== #
         self.sync_attributes = {}
@@ -244,7 +244,9 @@ class Sync:
             )
 
         # create reverse-lookup for patching
-        self.key_to_attr = {key: attr for attr, key in self.sync_attributes.items()}
+        self.key_to_attr: dict[str, str] = {
+            key: attr for attr, key in self.sync_attributes.items()
+        }
 
         # ========== Debugging ========== #
         if self.logger:
@@ -267,7 +269,7 @@ class Sync:
 
         # ========== Type Adapters ========== #
         # Create TypeAdapters once for each synced attribute with type hints
-        self.type_adapters = {}
+        self.type_adapters: dict[str, TypeAdapter[Any]] = {}
         try:
             type_hints = get_type_hints(type(obj))
             for attr_name in self.sync_attributes:
@@ -287,8 +289,8 @@ class Sync:
 
         # ========== State Management ========== #
         # the snapshot is the exact state that the frontend has, for patching
-        self.state_snapshot = self._snapshot()
-        self._last_sync = None  # timestamp of last sync
+        self.state_snapshot: dict[str, Any] = self._snapshot()
+        self._last_sync: float | None = None  # timestamp of last sync
         self._register_event_handlers()
 
     # ========== High-Level: Sync and Actions ========== #
@@ -378,7 +380,7 @@ class Sync:
         data = base64.b64encode(binary).decode("utf-8")
         await self.session.send(download_event(), {"filename": filename, "data": data})
 
-    def observe(self, obj, **sync_attributes: dict[str, str | EllipsisType]):
+    def observe(self, obj: object, **sync_attributes: str | EllipsisType):
         """
         Observe additional attributes, useful for when you're extending/subclassing an already Synced object, or when you want to observe multiple objects.
         """
@@ -386,7 +388,7 @@ class Sync:
         # TODO: append, deregister, re-register
 
     # ========== Low-Level: State Management ========== #
-    def _snapshot(self):
+    def _snapshot(self) -> dict[str, Any]:
         return {
             key: deepcopy(ensure_jsonable(getattr(self.obj, attr)))
             for attr, key in self.sync_attributes.items()
@@ -423,11 +425,11 @@ class Sync:
         if self.task_cancels:
             self.session.deregister_event(task_cancel_event(self.key))
 
-    async def _send_state(self, _=None):
+    async def _send_state(self, _: Any = None):
         self.state_snapshot = self._snapshot()
         await self.session.send(set_event(self.key), self.state_snapshot)
 
-    async def _set_state(self, new_state):
+    async def _set_state(self, new_state: dict[str, Any]):
         for key, value in new_state.items():
             if key == self.task_exposure:
                 continue
@@ -447,7 +449,7 @@ class Sync:
 
         self.state_snapshot = new_state  # update latest snapshot
 
-    async def _patch_state(self, patch):
+    async def _patch_state(self, patch: list[dict[str, Any]]):
         # Apply patch to the snapshot first
         self.state_snapshot = jsonpatch.apply_patch(
             self.state_snapshot, patch, in_place=True
@@ -472,7 +474,9 @@ class Sync:
                 )
 
     @staticmethod
-    def _create_action_handler(handlers: dict[str, Callable]):
+    def _create_action_handler(
+        handlers: dict[str, Callable[..., Any]],
+    ) -> Callable[[dict[str, Any]], Awaitable[None]]:
         async def _handle_action(action: dict):
             action_type = action.pop("type")
             if action_type in handlers:
@@ -483,8 +487,13 @@ class Sync:
         return _handle_action
 
     def _create_task_handlers(
-        self, factories: dict[str, Callable], on_cancel: dict[str, Callable] | None
-    ):
+        self,
+        factories: dict[str, Callable[..., Awaitable[Any]]],
+        on_cancel: dict[str, Callable[..., Awaitable[Any]]] | None,
+    ) -> tuple[
+        Callable[[dict[str, Any]], Awaitable[None]],
+        Callable[[dict[str, Any]], Awaitable[None]],
+    ]:
         async def _run_and_pop(task: Awaitable, task_type: str):
             try:
                 await task
@@ -525,5 +534,5 @@ class Sync:
         return _create_task, _cancel_task
 
     # ========== Utils ========== #
-    def casing(self, attr: str):
+    def casing(self, attr: str) -> str:
         return toCamelCase(attr) if self.camelize else attr

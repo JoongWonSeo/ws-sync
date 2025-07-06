@@ -32,10 +32,34 @@ poetry run pytest test_pydantic_sync.py
 poetry run pytest -v
 ```
 
+### Code Quality and Formatting
+```bash
+# Run pre-commit hooks (linting, formatting, type checking)
+pre-commit run --all-files
+
+# Auto-fix formatting and linting issues
+pre-commit run --all-files
+
+# Install pre-commit hooks (run once after cloning)
+pre-commit install
+```
+
 ### Development Workflow
 - Uses pytest for testing with pytest-asyncio for async test support
-- Pydantic is included as a dev dependency for testing
+- Pydantic is included as a dev dependency for testing  
 - The project uses Poetry for dependency management
+- Pre-commit hooks are configured with:
+  - **Ruff**: For linting and code formatting (replaces black + flake8)
+  - **Pyright**: For static type checking
+- **IMPORTANT**: Always run `pre-commit run --all-files` before committing to ensure code quality
+
+### Typing Conventions
+- Add type annotations where they provide clarity and aren't obvious to static analysis
+- **Function returns**: Only annotate return types for functions with explicit `return` statements
+- **No `-> None`**: Don't add `-> None` for functions without returns or with only bare `return`
+- **Parameter types**: Always annotate parameters unless types are completely obvious from context
+- **Complex types**: Use modern syntax (`dict[str, int]` not `Dict[str, int]`)
+- **Forward references**: Use string quotes for forward references (`-> 'ClassName'`)
 
 ## Core Architecture
 

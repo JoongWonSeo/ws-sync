@@ -40,7 +40,7 @@ class TestPydanticSync:
     """Test suite for Pydantic object synchronization"""
 
     @pytest.fixture
-    def mock_session(self):
+    def mock_session(self) -> Mock:
         """Create a mock session for testing"""
         session = Mock(spec=Session)
         session.send = AsyncMock()
@@ -54,12 +54,12 @@ class TestPydanticSync:
         return session
 
     @pytest.fixture
-    def sample_user(self):
+    def sample_user(self) -> User:
         """Create a sample user for testing"""
         return User(name="John Doe", age=30, email="john@example.com")
 
     @pytest.fixture
-    def sample_team(self, sample_user):
+    def sample_team(self, sample_user: User) -> Team:
         """Create a sample team for testing"""
         return Team(
             name="Engineering",
@@ -68,15 +68,15 @@ class TestPydanticSync:
         )
 
     @pytest.fixture
-    def sample_company(self, sample_team):
+    def sample_company(self, sample_team: Team) -> Company:
         """Create a sample company for testing"""
         return Company(
             name="Tech Corp",
             teams=[sample_team],
-            employees={"john": sample_team.leader, "jane": sample_team.members[1]},
+            employees={"john": sample_team.members[0], "jane": sample_team.members[1]},
         )
 
-    def test_simple_pydantic_model_sync(self, mock_session, sample_user):
+    def test_simple_pydantic_model_sync(self, mock_session: Mock, sample_user: User):
         """Test syncing a simple Pydantic model"""
 
         class UserContainer:
@@ -95,7 +95,7 @@ class TestPydanticSync:
         assert snapshot["user"]["age"] == 30
         assert snapshot["user"]["email"] == "john@example.com"
 
-    def test_list_of_pydantic_models_sync(self, mock_session, sample_user):
+    def test_list_of_pydantic_models_sync(self, mock_session: Mock, sample_user: User):
         """Test syncing a list of Pydantic models"""
 
         class UserListContainer:
@@ -116,7 +116,7 @@ class TestPydanticSync:
         assert snapshot["users"][0]["name"] == "John Doe"
         assert snapshot["users"][1]["name"] == "Jane Smith"
 
-    def test_dict_of_pydantic_models_sync(self, mock_session, sample_user):
+    def test_dict_of_pydantic_models_sync(self, mock_session: Mock, sample_user: User):
         """Test syncing a dict of Pydantic models"""
 
         class UserDictContainer:
@@ -138,7 +138,7 @@ class TestPydanticSync:
         assert snapshot["users"]["john"]["name"] == "John Doe"
         assert snapshot["users"]["jane"]["name"] == "Jane Smith"
 
-    def test_nested_pydantic_models_sync(self, mock_session, sample_team):
+    def test_nested_pydantic_models_sync(self, mock_session: Mock, sample_team: Team):
         """Test syncing nested Pydantic models"""
 
         class TeamContainer:
@@ -157,7 +157,9 @@ class TestPydanticSync:
         assert snapshot["team"]["members"][0]["name"] == "John Doe"
         assert snapshot["team"]["leader"]["name"] == "John Doe"
 
-    def test_complex_nested_structures_sync(self, mock_session, sample_company):
+    def test_complex_nested_structures_sync(
+        self, mock_session: Mock, sample_company: Company
+    ):
         """Test syncing complex nested structures"""
 
         class CompanyContainer:
@@ -177,7 +179,7 @@ class TestPydanticSync:
         assert snapshot["company"]["employees"]["john"]["name"] == "John Doe"
 
     @pytest.mark.asyncio
-    async def test_pydantic_model_deserialization(self, mock_session):
+    async def test_pydantic_model_deserialization(self, mock_session: Mock):
         """Test deserializing dict back to Pydantic model"""
 
         class UserContainer:
@@ -204,7 +206,7 @@ class TestPydanticSync:
         assert container.user.email == "updated@example.com"
 
     @pytest.mark.asyncio
-    async def test_pydantic_list_deserialization(self, mock_session):
+    async def test_pydantic_list_deserialization(self, mock_session: Mock):
         """Test deserializing list of dicts back to Pydantic models"""
 
         class UserListContainer:
@@ -232,7 +234,7 @@ class TestPydanticSync:
         assert container.users[1].email == "user2@example.com"
 
     @pytest.mark.asyncio
-    async def test_pydantic_dict_deserialization(self, mock_session):
+    async def test_pydantic_dict_deserialization(self, mock_session: Mock):
         """Test deserializing dict of dicts back to Pydantic models"""
 
         class UserDictContainer:
@@ -260,7 +262,7 @@ class TestPydanticSync:
         assert container.users["jane"].email == "jane@example.com"
 
     @pytest.mark.asyncio
-    async def test_partial_updates_with_patches(self, mock_session):
+    async def test_partial_updates_with_patches(self, mock_session: Mock):
         """Test that partial updates work correctly with Pydantic models"""
 
         class UserContainer:
@@ -282,7 +284,9 @@ class TestPydanticSync:
         assert container.user.name == "Original"  # unchanged
         assert container.user.age == 30  # updated
 
-    def test_mixed_pydantic_and_regular_attributes(self, mock_session, sample_user):
+    def test_mixed_pydantic_and_regular_attributes(
+        self, mock_session: Mock, sample_user: User
+    ):
         """Test syncing objects with both Pydantic and regular attributes"""
 
         class MixedContainer:
@@ -304,7 +308,9 @@ class TestPydanticSync:
         assert snapshot["count"] == 42
         assert snapshot["title"] == "Test Title"
 
-    def test_sync_only_with_pydantic_models(self, mock_session, sample_user):
+    def test_sync_only_with_pydantic_models(
+        self, mock_session: Mock, sample_user: User
+    ):
         """Test sync_only decorator with Pydantic models"""
 
         class SelectiveContainer:
@@ -323,7 +329,9 @@ class TestPydanticSync:
         assert "count" in snapshot
         assert "private_data" not in snapshot
 
-    def test_camel_case_conversion_with_pydantic(self, mock_session, sample_user):
+    def test_camel_case_conversion_with_pydantic(
+        self, mock_session: Mock, sample_user: User
+    ):
         """Test camelCase conversion with Pydantic models"""
 
         class CamelCaseContainer:

@@ -4,7 +4,7 @@ import traceback
 from asyncio import Lock
 from collections.abc import Callable
 from contextlib import suppress
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from logging import Logger
 from typing import Any
 
@@ -31,18 +31,20 @@ class Session:
     def __init__(self, logger: Logger | None = None):
         self.ws = None
         self.ws_lock = Lock()  # when multiple clients try to connect at the same time, we need to ensure that only one connection is established
-        self.event_handlers: dict[str, Callable] = {}  # triggered on event
-        self.init_handlers: list[Callable] = []  # triggered on connection init
+        self.event_handlers: dict[str, Callable[..., Any]] = {}  # triggered on event
+        self.init_handlers: list[
+            Callable[..., Any]
+        ] = []  # triggered on connection init
         self.logger = logger
         self.state: SessionState | None = None
         """user-assigned state associated with the session"""
 
     @property
-    def is_connected(self):
+    def is_connected(self) -> bool:
         return self.ws is not None
 
     # ===== Low-Level: Register Event Callbacks =====#
-    def register_event(self, event: str, callback: Callable):
+    def register_event(self, event: str, callback: Callable[..., Any]):
         if event in self.event_handlers:
             # raise Exception(f"Event {event} already has a subscriber.")
             if self.logger:
@@ -54,7 +56,7 @@ class Session:
             raise Exception(f"Event {event} has no subscriber.")
         del self.event_handlers[event]
 
-    def register_init(self, callback: Callable):
+    def register_init(self, callback: Callable[..., Any]):
         self.init_handlers.append(callback)
 
     # ===== Low-Level: Networking =====#
@@ -78,7 +80,7 @@ class Session:
 
     async def disconnect(
         self,
-        message="Seems like you're logged in somewhere else. If this is a mistake, please refresh the page.",
+        message: str = "Seems like you're logged in somewhere else. If this is a mistake, please refresh the page.",
         ws: WebSocket | None = None,
     ):
         """
@@ -188,14 +190,19 @@ class Session:
                     pass  # ignore errors during closing
 
     # ===== High-Level: Context Manager =====#
-    def __enter__(self):
+    def __enter__(self) -> Session:
         self.token = session_context.set(self)
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ):
         if self.token:
             session_context.reset(self.token)
-        self.token = None
+        self.token: Token[Session] | None = None
 
 
 class SessionState:
