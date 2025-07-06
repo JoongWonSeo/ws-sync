@@ -1,4 +1,6 @@
-from starlette.websockets import WebSocket
+from contextlib import suppress
+
+from starlette.websockets import WebSocket  # type: ignore[reportMissingImports]
 
 
 async def get_user_session(ws: WebSocket) -> tuple[str, str] | tuple[None, None]:
@@ -25,7 +27,6 @@ async def get_user_session(ws: WebSocket) -> tuple[str, str] | tuple[None, None]
 
         return user, session
     except Exception:
-        try:
+        with suppress(Exception):
             await ws.close()
-        finally:
-            return None, None
+        return None, None

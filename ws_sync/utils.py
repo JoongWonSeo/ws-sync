@@ -1,6 +1,7 @@
-import logging
 import asyncio
-from typing import Callable, Any
+import logging
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def ensure_jsonable(obj: Any) -> Any:
         return ensure_jsonable(obj.model_dump(mode="json"))
     elif isinstance(obj, dict):
         return {key: ensure_jsonable(value) for key, value in obj.items()}
-    elif isinstance(obj, (list, tuple, set)):
+    elif isinstance(obj, list | tuple | set):
         # Convert sequences to lists to ensure JSON compatibility
         return [ensure_jsonable(item) for item in obj]
     else:

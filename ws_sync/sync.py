@@ -1,11 +1,12 @@
 import asyncio
 import base64
 import warnings
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from logging import Logger
 from time import time
 from types import EllipsisType
-from typing import Any, Awaitable, Callable, Literal, get_type_hints
+from typing import Any, Literal, get_type_hints
 
 import jsonpatch
 from pydantic import TypeAdapter
@@ -71,8 +72,8 @@ class Sync:
         cls,
         obj: object,
         key: str,
-        include: dict[str, str | EllipsisType] = {},
-        exclude: list[str] = [],
+        include: dict[str, str | EllipsisType] | None = None,
+        exclude: list[str] | None = None,
         toCamelCase: bool = False,
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
@@ -85,8 +86,8 @@ class Sync:
             obj=obj,
             key=key,
             sync_all=True,
-            include=include,
-            exclude=exclude,
+            include=include or {},
+            exclude=exclude or [],
             toCamelCase=toCamelCase,
             send_on_init=send_on_init,
             expose_running_tasks=expose_running_tasks,
@@ -130,8 +131,8 @@ class Sync:
         obj: object,
         key: str,
         sync_all: bool = False,
-        include: dict[str, str | EllipsisType] = {},
-        exclude: list[str] = [],
+        include: dict[str, str | EllipsisType] | None = None,
+        exclude: list[str] | None = None,
         toCamelCase: bool = False,
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
@@ -171,6 +172,9 @@ class Sync:
         )
         self.logger = logger
 
+        include = include or {}
+        exclude = exclude or []
+
         self.session = session_context.get()
         assert self.session, "No session set, use the session.session_context variable!"
 
@@ -185,7 +189,7 @@ class Sync:
                 continue
             action = getattr(obj, attr)
             if callable(action) and hasattr(action, "remote_action"):
-                actions[action.remote_action] = action
+                actions[action.remote_action] = action  # type: ignore[attr-defined]
 
         self.actions = self._create_action_handler(actions)
 
@@ -202,9 +206,9 @@ class Sync:
             task = getattr(obj, attr)
             if callable(task):
                 if hasattr(task, "remote_task"):
-                    tasks[task.remote_task] = task
+                    tasks[task.remote_task] = task  # type: ignore[attr-defined]
                 if hasattr(task, "remote_task_cancel"):
-                    task_cancels[task.remote_task_cancel] = task
+                    task_cancels[task.remote_task_cancel] = task  # type: ignore[attr-defined]
 
         if tasks:
             self.tasks, self.task_cancels = self._create_task_handlers(
@@ -427,14 +431,14 @@ class Sync:
         for key, value in new_state.items():
             if key == self.task_exposure:
                 continue
+
+            attr_name = self.key_to_attr[key]
+            value = deepcopy(value)
+
+            if attr_name in self.type_adapters:
+                value = self.type_adapters[attr_name].validate_python(value)
             try:
-                attr_name = self.key_to_attr[key]
-
-                if attr_name in self.type_adapters:
-                    value = self.type_adapters[attr_name].validate_python(value)
-
                 setattr(self.obj, attr_name, value)
-
             except AttributeError:
                 # trying to set a property without setter (readonly), don't set
                 assert getattr(self.obj, attr_name) == value, (
@@ -453,15 +457,14 @@ class Sync:
             if key == self.task_exposure:
                 continue
 
+            attr_name = self.key_to_attr[key]
+            value = deepcopy(value)
+
+            if attr_name in self.type_adapters:
+                value = self.type_adapters[attr_name].validate_python(value)
+
             try:
-                attr_name = self.key_to_attr[key]
-                value = deepcopy(value)
-
-                if attr_name in self.type_adapters:
-                    value = self.type_adapters[attr_name].validate_python(value)
-
                 setattr(self.obj, attr_name, value)
-
             except AttributeError:
                 # trying to set a property without setter (readonly), don't set
                 assert getattr(self.obj, attr_name) == value, (

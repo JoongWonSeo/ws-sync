@@ -86,8 +86,8 @@ class Calendar:
 ```
 """
 
-from logging import Logger
 from functools import wraps
+from logging import Logger
 from types import EllipsisType
 
 from .sync import Sync
@@ -96,8 +96,8 @@ from .sync import Sync
 def sync(
     key: str,
     sync_all: bool = False,
-    include: dict[str, str | EllipsisType] = {},
-    exclude: list[str] = [],
+    include: dict[str, str | EllipsisType] | None = None,
+    exclude: list[str] | None = None,
     toCamelCase: bool = False,
     send_on_init: bool = True,
     expose_running_tasks: bool = False,
@@ -124,8 +124,8 @@ def sync(
                 obj=self,
                 key=key,
                 sync_all=sync_all,
-                include=include,
-                exclude=exclude,
+                include=include or {},
+                exclude=exclude or [],
                 toCamelCase=toCamelCase,
                 send_on_init=send_on_init,
                 expose_running_tasks=expose_running_tasks,
@@ -139,8 +139,8 @@ def sync(
 
 def sync_all(
     key: str,
-    include: dict[str, str | EllipsisType] = {},
-    exclude: list[str] = [],
+    include: dict[str, str | EllipsisType] | None = None,
+    exclude: list[str] | None = None,
     toCamelCase: bool = False,
     send_on_init: bool = True,
     expose_running_tasks: bool = False,
@@ -161,8 +161,8 @@ def sync_all(
     return sync(
         key=key,
         sync_all=True,
-        include=include,
-        exclude=exclude,
+        include=include or {},
+        exclude=exclude or [],
         toCamelCase=toCamelCase,
         send_on_init=send_on_init,
         expose_running_tasks=expose_running_tasks,
@@ -219,7 +219,7 @@ def remote_action(key: str):
         wrapper.remote_action = key  # type: ignore
         return wrapper
 
-    decorator.forgot_to_call = True
+    decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
     return decorator
 
 
@@ -242,7 +242,7 @@ def remote_task(key: str):
         wrapper.cancel = remote_task_cancel(key)  # type: ignore # syntactic sugar
         return wrapper
 
-    decorator.forgot_to_call = True
+    decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
     return decorator
 
 
@@ -271,5 +271,5 @@ def remote_task_cancel(key: str):
         wrapper.remote_task_cancel = key  # type: ignore
         return wrapper
 
-    decorator.forgot_to_call = True
+    decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
     return decorator
