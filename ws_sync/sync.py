@@ -187,9 +187,12 @@ class Sync:
                 getattr(type(obj), attr), property
             ):  # ignore properties to prevent infinite recursion
                 continue
-            action = getattr(obj, attr)
-            if callable(action) and hasattr(action, "remote_action"):
-                actions[action.remote_action] = action  # type: ignore[attr-defined]
+            try:
+                action = getattr(obj, attr)
+                if callable(action) and hasattr(action, "remote_action"):
+                    actions[action.remote_action] = action  # type: ignore[attr-defined]
+            except AttributeError:
+                pass
 
         self.actions = self._create_action_handler(actions)
 
@@ -203,12 +206,15 @@ class Sync:
                 getattr(type(obj), attr), property
             ):  # ignore properties to prevent infinite recursion
                 continue
-            task = getattr(obj, attr)
-            if callable(task):
-                if hasattr(task, "remote_task"):
-                    tasks[task.remote_task] = task  # type: ignore[attr-defined]
-                if hasattr(task, "remote_task_cancel"):
-                    task_cancels[task.remote_task_cancel] = task  # type: ignore[attr-defined]
+            try:
+                task = getattr(obj, attr)
+                if callable(task):
+                    if hasattr(task, "remote_task"):
+                        tasks[task.remote_task] = task  # type: ignore[attr-defined]
+                    if hasattr(task, "remote_task_cancel"):
+                        task_cancels[task.remote_task_cancel] = task  # type: ignore[attr-defined]
+            except AttributeError:
+                pass
 
         if tasks:
             self.tasks, self.task_cancels = self._create_task_handlers(
@@ -226,7 +232,10 @@ class Sync:
         # observe all non-private attributes
         if sync_all:
             for attr_name in dir(obj):
-                attr = getattr(obj, attr_name)
+                try:
+                    attr = getattr(obj, attr_name)
+                except AttributeError:
+                    continue
                 if (
                     attr_name in exclude
                     or attr_name.startswith("_")
@@ -262,10 +271,13 @@ class Sync:
         #     len(self.sync_attributes) + expose_running_tasks > 0
         # ), "No attributes to sync"
         for attr in dir(obj):
-            if hasattr(getattr(obj, attr), "forgot_to_call"):
-                raise Exception(
-                    f'You did @remote_action instead of @remote_action(...) for attribute "{attr}"'
-                )
+            try:
+                if hasattr(getattr(obj, attr), "forgot_to_call"):
+                    raise Exception(
+                        f'You did @remote_action instead of @remote_action(...) for attribute "{attr}"'
+                    )
+            except AttributeError:
+                pass
 
         # ========== Type Adapters ========== #
         # Create TypeAdapters once for each synced attribute with type hints
