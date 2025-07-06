@@ -1,15 +1,15 @@
-from pydantic import BaseModel, PrivateAttr
+from pydantic import PrivateAttr
 
 from .sync import Sync
 
 
-class SyncedModel(BaseModel):
+class HasSync:
     """
-    A simple base class (or mixin) that provides a `sync` attribute in a way that is compatible with pydantic.
+    A mixin class that provides a `sync` attribute in a way that is compatible with any pydantic BaseModel subclass.
 
-    Example:
+    Example with BaseModel:
     ```python
-    class SyncedUser(SyncedModel):
+    class SyncedUser(HasSync, BaseModel):
         name: str
         contacts: dict[str, str]
 
@@ -18,9 +18,21 @@ class SyncedModel(BaseModel):
             self.sync = Sync(self, key="USER", sync_all=True, toCamelCase=True)
 
     u = SyncedUser(name="John", contacts={"email": "john@example.com", "phone": "+1234567890"})
-
     await u.sync()
+    ```
 
+    Example with custom BaseModel:
+    ```python
+    class MyBaseModel(BaseModel):
+        # custom configuration
+        pass
+
+    class SyncedUser(HasSync, MyBaseModel):
+        name: str
+        contacts: dict[str, str]
+
+        def model_post_init(self, context):
+            self.sync = Sync(self, key="USER", sync_all=True, toCamelCase=True)
     ```
     """
 
