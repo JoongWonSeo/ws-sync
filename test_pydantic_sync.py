@@ -1,0 +1,314 @@
+"""
+Tests for Pydantic object syncing feature in ws-sync.
+"""
+from typing import List, Dict, Optional
+from unittest.mock import Mock, AsyncMock
+
+import pytest
+from pydantic import BaseModel
+
+from ws_sync import Session, sync_all, sync_only
+from ws_sync.session import session_context
+
+
+class User(BaseModel):
+    """Test Pydantic model"""
+    name: str
+    age: int
+    email: Optional[str] = None
+
+
+class Team(BaseModel):
+    """Test Pydantic model with nested structure"""
+    name: str
+    members: List[User]
+    leader: Optional[User] = None
+
+
+class Company(BaseModel):
+    """Test Pydantic model with complex nesting"""
+    name: str
+    teams: List[Team]
+    employees: Dict[str, User]
+
+
+class TestPydanticSync:
+    """Test suite for Pydantic object synchronization"""
+
+    @pytest.fixture
+    def mock_session(self):
+        """Create a mock session for testing"""
+        session = Mock(spec=Session)
+        session.send = AsyncMock()
+        session.register_event = Mock()
+        session.register_init = Mock()
+        session.deregister_event = Mock()
+        session.is_connected = True
+        
+        # Set up context
+        session_context.set(session)
+        return session
+
+    @pytest.fixture
+    def sample_user(self):
+        """Create a sample user for testing"""
+        return User(name="John Doe", age=30, email="john@example.com")
+
+    @pytest.fixture
+    def sample_team(self, sample_user):
+        """Create a sample team for testing"""
+        return Team(
+            name="Engineering",
+            members=[sample_user, User(name="Jane Smith", age=25)],
+            leader=sample_user
+        )
+
+    @pytest.fixture
+    def sample_company(self, sample_team):
+        """Create a sample company for testing"""
+        return Company(
+            name="Tech Corp",
+            teams=[sample_team],
+            employees={
+                "john": sample_team.leader,
+                "jane": sample_team.members[1]
+            }
+        )
+
+    def test_simple_pydantic_model_sync(self, mock_session, sample_user):
+        """Test syncing a simple Pydantic model"""
+        class UserContainer:
+            @sync_all("USER_CONTAINER")
+            def __init__(self, user: User):
+                self.user = user
+
+        container = UserContainer(sample_user)
+        
+        # Check that the user model is serialized correctly
+        snapshot = container.sync._snapshot()
+        assert "user" in snapshot
+        assert snapshot["user"]["name"] == "John Doe"
+        assert snapshot["user"]["age"] == 30
+        assert snapshot["user"]["email"] == "john@example.com"
+
+    def test_list_of_pydantic_models_sync(self, mock_session, sample_user):
+        """Test syncing a list of Pydantic models"""
+        class UserListContainer:
+            @sync_all("USER_LIST")
+            def __init__(self):
+                self.users: List[User] = [
+                    sample_user,
+                    User(name="Jane Smith", age=25, email="jane@example.com")
+                ]
+
+        container = UserListContainer()
+        
+        snapshot = container.sync._snapshot()
+        assert "users" in snapshot
+        assert len(snapshot["users"]) == 2
+        assert snapshot["users"][0]["name"] == "John Doe"
+        assert snapshot["users"][1]["name"] == "Jane Smith"
+
+    def test_dict_of_pydantic_models_sync(self, mock_session, sample_user):
+        """Test syncing a dict of Pydantic models"""
+        class UserDictContainer:
+            @sync_all("USER_DICT")
+            def __init__(self):
+                self.users: Dict[str, User] = {
+                    "john": sample_user,
+                    "jane": User(name="Jane Smith", age=25)
+                }
+
+        container = UserDictContainer()
+        
+        snapshot = container.sync._snapshot()
+        assert "users" in snapshot
+        assert "john" in snapshot["users"]
+        assert "jane" in snapshot["users"]
+        assert snapshot["users"]["john"]["name"] == "John Doe"
+        assert snapshot["users"]["jane"]["name"] == "Jane Smith"
+
+    def test_nested_pydantic_models_sync(self, mock_session, sample_team):
+        """Test syncing nested Pydantic models"""
+        class TeamContainer:
+            @sync_all("TEAM_CONTAINER")
+            def __init__(self, team: Team):
+                self.team = team
+
+        container = TeamContainer(sample_team)
+        
+        snapshot = container.sync._snapshot()
+        assert "team" in snapshot
+        assert snapshot["team"]["name"] == "Engineering"
+        assert len(snapshot["team"]["members"]) == 2
+        assert snapshot["team"]["members"][0]["name"] == "John Doe"
+        assert snapshot["team"]["leader"]["name"] == "John Doe"
+
+    def test_complex_nested_structures_sync(self, mock_session, sample_company):
+        """Test syncing complex nested structures"""
+        class CompanyContainer:
+            @sync_all("COMPANY")
+            def __init__(self, company: Company):
+                self.company = company
+
+        container = CompanyContainer(sample_company)
+        
+        snapshot = container.sync._snapshot()
+        assert "company" in snapshot
+        assert snapshot["company"]["name"] == "Tech Corp"
+        assert len(snapshot["company"]["teams"]) == 1
+        assert len(snapshot["company"]["employees"]) == 2
+        assert snapshot["company"]["employees"]["john"]["name"] == "John Doe"
+
+    @pytest.mark.asyncio
+    async def test_pydantic_model_deserialization(self, mock_session):
+        """Test deserializing dict back to Pydantic model"""
+        class UserContainer:
+            user: User
+            
+            @sync_all("USER_CONTAINER")
+            def __init__(self):
+                self.user: User = User(name="Initial", age=0)
+
+        container = UserContainer()
+        
+        # Simulate receiving state from frontend
+        new_state = {
+            "user": {
+                "name": "Updated User",
+                "age": 35,
+                "email": "updated@example.com"
+            }
+        }
+        
+        # This should convert the dict back to a User model
+        await container.sync._set_state(new_state)
+        
+        assert isinstance(container.user, User)
+        assert container.user.name == "Updated User"
+        assert container.user.age == 35
+        assert container.user.email == "updated@example.com"
+
+    @pytest.mark.asyncio
+    async def test_pydantic_list_deserialization(self, mock_session):
+        """Test deserializing list of dicts back to Pydantic models"""
+        class UserListContainer:
+            users: List[User]
+            
+            @sync_all("USER_LIST")
+            def __init__(self):
+                self.users: List[User] = []
+
+        container = UserListContainer()
+        
+        new_state = {
+            "users": [
+                {"name": "User 1", "age": 25},
+                {"name": "User 2", "age": 30, "email": "user2@example.com"}
+            ]
+        }
+        
+        await container.sync._set_state(new_state)
+        
+        assert len(container.users) == 2
+        assert all(isinstance(user, User) for user in container.users)
+        assert container.users[0].name == "User 1"
+        assert container.users[1].email == "user2@example.com"
+
+    @pytest.mark.asyncio
+    async def test_pydantic_dict_deserialization(self, mock_session):
+        """Test deserializing dict of dicts back to Pydantic models"""
+        class UserDictContainer:
+            users: Dict[str, User]
+            
+            @sync_all("USER_DICT")
+            def __init__(self):
+                self.users: Dict[str, User] = {}
+
+        container = UserDictContainer()
+        
+        new_state = {
+            "users": {
+                "john": {"name": "John", "age": 30},
+                "jane": {"name": "Jane", "age": 25, "email": "jane@example.com"}
+            }
+        }
+        
+        await container.sync._set_state(new_state)
+        
+        assert len(container.users) == 2
+        assert all(isinstance(user, User) for user in container.users.values())
+        assert container.users["john"].name == "John"
+        assert container.users["jane"].email == "jane@example.com"
+
+    @pytest.mark.asyncio
+    async def test_partial_updates_with_patches(self, mock_session):
+        """Test that partial updates work correctly with Pydantic models"""
+        class UserContainer:
+            user: User
+            
+            @sync_all("USER_CONTAINER")
+            def __init__(self):
+                self.user: User = User(name="Original", age=25)
+
+        container = UserContainer()
+        
+        # Simulate a patch that only updates the age
+        patch = [{"op": "replace", "path": "/user/age", "value": 30}]
+        
+        await container.sync._patch_state(patch)
+        
+        assert isinstance(container.user, User)
+        assert container.user.name == "Original"  # unchanged
+        assert container.user.age == 30  # updated
+
+    def test_mixed_pydantic_and_regular_attributes(self, mock_session, sample_user):
+        """Test syncing objects with both Pydantic and regular attributes"""
+        class MixedContainer:
+            @sync_all("MIXED")
+            def __init__(self):
+                self.user: User = sample_user
+                self.count: int = 42
+                self.title: str = "Test Title"
+
+        container = MixedContainer()
+        
+        snapshot = container.sync._snapshot()
+        assert "user" in snapshot
+        assert "count" in snapshot
+        assert "title" in snapshot
+        assert snapshot["user"]["name"] == "John Doe"
+        assert snapshot["count"] == 42
+        assert snapshot["title"] == "Test Title"
+
+    def test_sync_only_with_pydantic_models(self, mock_session, sample_user):
+        """Test sync_only decorator with Pydantic models"""
+        class SelectiveContainer:
+            @sync_only("SELECTIVE", user=..., count=...)
+            def __init__(self):
+                self.user: User = sample_user
+                self.count: int = 42
+                self.private_data: str = "secret"  # not synced
+
+        container = SelectiveContainer()
+        
+        snapshot = container.sync._snapshot()
+        assert "user" in snapshot
+        assert "count" in snapshot
+        assert "private_data" not in snapshot
+
+    def test_camel_case_conversion_with_pydantic(self, mock_session, sample_user):
+        """Test camelCase conversion with Pydantic models"""
+        class CamelCaseContainer:
+            @sync_all("CAMEL_CASE", toCamelCase=True)
+            def __init__(self):
+                self.user_profile: User = sample_user
+                self.user_count: int = 1
+
+        container = CamelCaseContainer()
+        
+        snapshot = container.sync._snapshot()
+        assert "userProfile" in snapshot
+        assert "userCount" in snapshot
+        assert "user_profile" not in snapshot
+        assert "user_count" not in snapshot

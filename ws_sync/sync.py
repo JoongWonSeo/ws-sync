@@ -1,16 +1,17 @@
 import asyncio
 import base64
-from types import EllipsisType
 import warnings
-from typing import Any, Awaitable, Callable, Literal
 from copy import deepcopy
 from logging import Logger
 from time import time
+from types import EllipsisType
+from typing import Any, Awaitable, Callable, Literal, get_type_hints
 
 import jsonpatch
+from pydantic import TypeAdapter, ValidationError
 
 from .session import session_context
-from .utils import toCamelCase
+from .utils import ensure_jsonable, toCamelCase
 
 
 # Event Type Helpers
@@ -260,6 +261,26 @@ class Sync:
                     f'You did @remote_action instead of @remote_action(...) for attribute "{attr}"'
                 )
 
+        # ========== Type Adapters ========== #
+        # Create TypeAdapters once for each synced attribute with type hints
+        self.type_adapters = {}
+        try:
+            type_hints = get_type_hints(type(obj))
+            for attr_name in self.sync_attributes:
+                if attr_name in type_hints:
+                    try:
+                        self.type_adapters[attr_name] = TypeAdapter(
+                            type_hints[attr_name]
+                        )
+                    except (TypeError, ValueError) as e:
+                        if self.logger:
+                            self.logger.warning(
+                                f"Failed to create TypeAdapter for {attr_name}: {e}"
+                            )
+        except (TypeError, NameError) as e:
+            if self.logger:
+                self.logger.warning(f"Failed to get type hints: {e}")
+
         # ========== State Management ========== #
         # the snapshot is the exact state that the frontend has, for patching
         self.state_snapshot = self._snapshot()
@@ -363,7 +384,7 @@ class Sync:
     # ========== Low-Level: State Management ========== #
     def _snapshot(self):
         return {
-            key: deepcopy(getattr(self.obj, attr))
+            key: deepcopy(ensure_jsonable(getattr(self.obj, attr)))
             for attr, key in self.sync_attributes.items()
         } | (
             {self.task_exposure: list(self.running_tasks.keys())}
@@ -403,21 +424,104 @@ class Sync:
         await self.session.send(set_event(self.key), self.state_snapshot)
 
     async def _set_state(self, new_state):
-        for attr, value in new_state.items():
-            setattr(self.obj, attr, value)
-
-    async def _patch_state(self, patch):
-        self.state_snapshot = jsonpatch.apply_patch(
-            self.state_snapshot, patch, in_place=True
-        )
-        for key, value in self.state_snapshot.items():
+        for key, value in new_state.items():
             if key == self.task_exposure:
                 continue
             try:
-                setattr(self.obj, self.key_to_attr[key], deepcopy(value))
+                attr_name = self.key_to_attr[key]
+                final_value = deepcopy(value)
+
+                # Use cached TypeAdapter if available
+                if attr_name in self.type_adapters:
+                    try:
+                        final_value = self.type_adapters[attr_name].validate_python(
+                            value
+                        )
+                    except (ValidationError, TypeError) as e:
+                        if self.logger:
+                            self.logger.error(f"Failed to validate {key}: {e}")
+                        # Fall back to original value
+
+                setattr(self.obj, attr_name, final_value)
+
+            except KeyError:
+                warnings.warn(f"Key {key} not found in key_to_attr mapping.")
             except AttributeError:
-                # attempting to set a property without a setter
+                # trying to set a property without setter
                 pass
+            except Exception as e:
+                # Catch unexpected errors during setting
+                if self.logger:
+                    self.logger.error(
+                        f"Error setting attribute {attr_name} for key {key}: {e}"
+                    )
+
+        self.state_snapshot = self._snapshot()  # Resync snapshot after setting
+
+    async def _patch_state(self, patch):
+        # Apply patch to the snapshot first
+        try:
+            new_snapshot = jsonpatch.apply_patch(
+                self.state_snapshot, patch, in_place=False
+            )
+        except jsonpatch.JsonPatchException as e:
+            if self.logger:
+                self.logger.error(f"Failed to apply patch: {e}")
+            # Optionally request a full state resync from frontend
+            # await self.session.send(get_event(self.key), {})
+            return
+
+        for key, new_value in new_snapshot.items():
+            if key == self.task_exposure:
+                # Handle task exposure separately if needed, though it's usually read-only from backend
+                continue
+
+            try:
+                attr_name = self.key_to_attr[key]
+                final_value = deepcopy(new_value)
+                current_value = getattr(self.obj, attr_name)
+
+                # Use cached TypeAdapter if available
+                if attr_name in self.type_adapters:
+                    try:
+                        parsed_value = self.type_adapters[attr_name].validate_python(
+                            new_value
+                        )
+                        # Only update if the parsed value is different from current
+                        if parsed_value != current_value:
+                            setattr(self.obj, attr_name, parsed_value)
+                    except (ValidationError, TypeError) as e:
+                        if self.logger:
+                            self.logger.error(
+                                f"Failed to validate patched value for {key}: {e}"
+                            )
+                        # Fallback: if parsing fails, compare values directly
+                        if current_value != final_value:
+                            setattr(self.obj, attr_name, final_value)
+                else:
+                    # No type annotation, just do direct comparison
+                    if current_value != final_value:
+                        setattr(self.obj, attr_name, final_value)
+
+            except KeyError:
+                warnings.warn(
+                    f"Key {key} not found in key_to_attr mapping during patch."
+                )
+            except AttributeError:
+                # trying to set a property without setter or attr doesn't exist
+                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(
+                        f"Error processing patch for attribute {attr_name} (key {key}): {e}"
+                    )
+
+        # Update the official snapshot only *after* successfully applying changes to the object
+        self.state_snapshot = new_snapshot
+
+        # Optional: If the patch caused changes, maybe trigger follow-up actions
+        # if something_changed_on_obj:
+        #     pass # e.g., trigger a calculation, save to db, etc.
 
     @staticmethod
     def _create_action_handler(handlers: dict[str, Callable]):
