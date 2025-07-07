@@ -16,6 +16,7 @@ pydantic = "^2"
 pytest = "^8.4.1"
 pytest-asyncio = "^1.0.0"
 ipykernel = "^6.29.5"
+pytest-xdist = "^3.8.0"
 
 [build-system]
 requires = ["poetry-core"]

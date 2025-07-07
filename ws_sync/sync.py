@@ -72,7 +72,7 @@ class Sync:
         cls,
         obj: object,
         key: str,
-        include: dict[str, str | EllipsisType] | None = None,
+        include: dict[str, str | EllipsisType] | list[str] | None = None,
         exclude: list[str] | None = None,
         toCamelCase: bool | None = None,
         send_on_init: bool = True,
@@ -86,7 +86,7 @@ class Sync:
             obj=obj,
             key=key,
             sync_all=True,
-            include=include or {},
+            include=include,
             exclude=exclude or [],
             toCamelCase=toCamelCase,
             send_on_init=send_on_init,
@@ -131,7 +131,7 @@ class Sync:
         obj: object,
         key: str,
         sync_all: bool = False,
-        include: dict[str, str | EllipsisType] | None = None,
+        include: dict[str, str | EllipsisType] | list[str] | None = None,
         exclude: list[str] | None = None,
         toCamelCase: bool | None = None,
         send_on_init: bool = True,
@@ -167,24 +167,39 @@ class Sync:
         self.obj = obj
         self.key = key
         self.send_on_init = send_on_init
+        self.casing_func: Callable[[str], str]
         if isinstance(obj, BaseModel):
             assert toCamelCase is None, (
                 "Use model_config.alias_generator for Pydantic models"
             )
             alias_gen = type(obj).model_config.get("alias_generator")
             if isinstance(alias_gen, AliasGenerator):
-                self.casing_func = alias_gen.serialization_alias
+                self.casing_func = (
+                    alias_gen.serialization_alias or alias_gen.alias or (lambda x: x)
+                )
             else:
                 self.casing_func = alias_gen or (lambda x: x)
         else:
-            self.casing_func = toCamelCase and toCamelCaseFn or (lambda x: x)
+            self.casing_func = toCamelCaseFn if toCamelCase else (lambda x: x)
         self.task_exposure = (
             self.casing("running_tasks") if expose_running_tasks else None
         )
         self.logger = logger
 
+        # Convert list[str] include to dict format
+        if isinstance(include, list):
+            include = {attr: ... for attr in include}
         include = include or {}
         exclude = exclude or []
+
+        # Validate that BaseModel objects don't use custom sync keys
+        if isinstance(obj, BaseModel) and include:
+            for attr_name, sync_key in include.items():
+                if sync_key is not ...:
+                    raise AssertionError(
+                        f"Custom sync key '{sync_key}' for attribute '{attr_name}' is not allowed for Pydantic models. "
+                        "Use pydantic's alias_generator in model_config instead."
+                    )
 
         self.session = session_context.get()
         assert self.session, "No session set, use the session.session_context variable!"
@@ -199,7 +214,9 @@ class Sync:
             ):  # ignore properties to prevent infinite recursion
                 continue
             try:
-                action = getattr(obj, attr)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=DeprecationWarning)
+                    action = getattr(obj, attr)
                 if callable(action) and hasattr(action, "remote_action"):
                     actions[action.remote_action] = action  # type: ignore[attr-defined]
             except AttributeError:
@@ -218,7 +235,9 @@ class Sync:
             ):  # ignore properties to prevent infinite recursion
                 continue
             try:
-                task = getattr(obj, attr)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=DeprecationWarning)
+                    task = getattr(obj, attr)
                 if callable(task):
                     if hasattr(task, "remote_task"):
                         tasks[task.remote_task] = task  # type: ignore[attr-defined]
@@ -244,6 +263,8 @@ class Sync:
         if sync_all:
             if isinstance(obj, BaseModel):
                 for field in type(obj).model_fields:
+                    if field in exclude:
+                        continue
                     self.sync_attributes[field] = self.casing(field)
             else:
                 for attr_name in dir(obj):
@@ -285,14 +306,16 @@ class Sync:
         # assert (
         #     len(self.sync_attributes) + expose_running_tasks > 0
         # ), "No attributes to sync"
-        for attr in dir(obj):
-            try:
-                if hasattr(getattr(obj, attr), "forgot_to_call"):
-                    raise Exception(
-                        f'You did @remote_action instead of @remote_action(...) for attribute "{attr}"'
-                    )
-            except AttributeError:
-                pass
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            for attr in dir(obj):
+                try:
+                    if hasattr(getattr(obj, attr), "forgot_to_call"):
+                        raise Exception(
+                            f'You did @remote_action instead of @remote_action(...) for attribute "{attr}"'
+                        )
+                except AttributeError:
+                    pass
 
         # ========== Type Adapters ========== #
         # Create TypeAdapters once for each synced attribute with type hints
@@ -417,15 +440,23 @@ class Sync:
     # ========== Low-Level: State Management ========== #
     def _snapshot(self) -> dict[str, Any]:
         result = {}
-        for attr, key in self.sync_attributes.items():
-            value = getattr(self.obj, attr)
-            if attr in self.type_adapters:
-                # Use TypeAdapter to serialize with warnings disabled
-                result[key] = self.type_adapters[attr].dump_python(
-                    value, mode="json", warnings=False
-                )
-            else:
-                result[key] = deepcopy(value)
+
+        if isinstance(self.obj, BaseModel):
+            result = self.obj.model_dump(
+                mode="json",
+                include=set(self.sync_attributes.keys()),
+                warnings=False,
+            )
+        else:
+            for attr, key in self.sync_attributes.items():
+                value = getattr(self.obj, attr)
+                if attr in self.type_adapters:
+                    # Use TypeAdapter to serialize with warnings disabled
+                    result[key] = self.type_adapters[attr].dump_python(
+                        value, mode="json", warnings=False
+                    )
+                else:
+                    result[key] = deepcopy(value)
 
         if self.task_exposure:
             result[self.task_exposure] = list(self.running_tasks.keys())

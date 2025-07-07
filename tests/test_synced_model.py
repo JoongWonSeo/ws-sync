@@ -1,12 +1,12 @@
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
-import jsonpatch
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from ws_sync.session import Session, session_context
 from ws_sync.sync import Sync
 from ws_sync.synced_model import Synced, SyncedAsCamelCase
+
+from .utils import get_patch
 
 
 class Person(SyncedAsCamelCase, BaseModel):
@@ -14,51 +14,33 @@ class Person(SyncedAsCamelCase, BaseModel):
     last_name: str
 
     def model_post_init(self, context):
-        self.sync = Sync(self, key="PERSON", sync_all=True)
+        self.sync = Sync.all(self, key="PERSON")
 
 
 class Animal(Synced, BaseModel):
     species_name: str
 
     def model_post_init(self, context):
-        self.sync = Sync(self, key="ANIMAL", sync_all=True)
+        self.sync = Sync.all(self, key="ANIMAL")
 
 
 class CamelParent(SyncedAsCamelCase, BaseModel):
     nick_name: str
 
     def model_post_init(self, context):
-        self.sync = Sync(self, key="PARENT", sync_all=True)
+        self.sync = Sync.all(self, key="PARENT")
 
 
 class CamelChild(CamelParent):
-    pass
+    also_camel: str = ""
 
 
 class PlainChild(CamelParent):
-    model_config = ConfigDict()
+    model_config = ConfigDict(alias_generator=None, serialize_by_alias=False)
+    snake_case: str = ""
 
 
-# utils
-
-
-def get_patch(sync: Sync):
-    prev = sync.state_snapshot
-    sync.state_snapshot = sync._snapshot()
-    return jsonpatch.make_patch(prev, sync.state_snapshot).patch
-
-
-@pytest.fixture
-def mock_session() -> Mock:
-    session = Mock(spec=Session)
-    session.send = AsyncMock()
-    session.register_event = Mock()
-    session.register_init = Mock()
-    session.deregister_event = Mock()
-    session.is_connected = True
-
-    session_context.set(session)
-    return session
+# Test utilities are imported from .utils
 
 
 # camelCase behavior
@@ -121,10 +103,16 @@ def test_init_uses_field_names(mock_session: Mock):
 
 
 def test_inherited_config(mock_session: Mock):
-    c = CamelChild(nick_name="X")
-    assert c.model_dump() == {"nickName": "X"}
+    c = CamelChild(nick_name="X", also_camel="Y")
+    assert c.model_dump() == {"nickName": "X", "alsoCamel": "Y"}
+    c.nick_name = "A"
+    assert get_patch(c.sync) == [{"op": "replace", "path": "/nickName", "value": "A"}]
 
 
 def test_override_config(mock_session: Mock):
-    p = PlainChild(nick_name="Y")
-    assert p.model_dump() == {"nick_name": "Y"}
+    p = PlainChild(nick_name="Y", snake_case="Z")
+    assert p.model_dump() == {"nick_name": "Y", "snake_case": "Z"}
+    p.nick_name = "A"
+    assert get_patch(p.sync) == [{"op": "replace", "path": "/nick_name", "value": "A"}]
+    p.snake_case = "B"
+    assert get_patch(p.sync) == [{"op": "replace", "path": "/snake_case", "value": "B"}]

@@ -2,79 +2,22 @@
 Tests for Pydantic object syncing feature in ws-sync.
 """
 
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import pytest
-from pydantic import BaseModel
 
-from ws_sync import Session, sync_all, sync_only
-from ws_sync.session import session_context
+from ws_sync import sync_all, sync_only
 from ws_sync.sync import Sync
 
+from .utils import Company, Team, User
 
-class User(BaseModel):
-    """Test Pydantic model"""
-
-    name: str
-    age: int
-    email: str | None = None
-
-
-class Team(BaseModel):
-    """Test Pydantic model with nested structure"""
-
-    name: str
-    members: list[User]
-    leader: User | None = None
-
-
-class Company(BaseModel):
-    """Test Pydantic model with complex nesting"""
-
-    name: str
-    teams: list[Team]
-    employees: dict[str, User]
+# Test models are imported from .utils
 
 
 class TestPydanticSync:
     """Test suite for Pydantic object synchronization"""
 
-    @pytest.fixture
-    def mock_session(self) -> Mock:
-        """Create a mock session for testing"""
-        session = Mock(spec=Session)
-        session.send = AsyncMock()
-        session.register_event = Mock()
-        session.register_init = Mock()
-        session.deregister_event = Mock()
-        session.is_connected = True
-
-        # Set up context
-        session_context.set(session)
-        return session
-
-    @pytest.fixture
-    def sample_user(self) -> User:
-        """Create a sample user for testing"""
-        return User(name="John Doe", age=30, email="john@example.com")
-
-    @pytest.fixture
-    def sample_team(self, sample_user: User) -> Team:
-        """Create a sample team for testing"""
-        return Team(
-            name="Engineering",
-            members=[sample_user, User(name="Jane Smith", age=25)],
-            leader=sample_user,
-        )
-
-    @pytest.fixture
-    def sample_company(self, sample_team: Team) -> Company:
-        """Create a sample company for testing"""
-        return Company(
-            name="Tech Corp",
-            teams=[sample_team],
-            employees={"john": sample_team.members[0], "jane": sample_team.members[1]},
-        )
+    # Fixtures are imported from .utils
 
     def test_simple_pydantic_model_sync(self, mock_session: Mock, sample_user: User):
         """Test syncing a simple Pydantic model"""

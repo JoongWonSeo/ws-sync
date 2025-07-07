@@ -96,7 +96,7 @@ from .sync import Sync
 def sync(
     key: str,
     sync_all: bool = False,
-    include: dict[str, str | EllipsisType] | None = None,
+    include: dict[str, str | EllipsisType] | list[str] | None = None,
     exclude: list[str] | None = None,
     toCamelCase: bool | None = None,
     send_on_init: bool = True,
@@ -124,7 +124,7 @@ def sync(
                 obj=self,
                 key=key,
                 sync_all=sync_all,
-                include=include or {},
+                include=include,
                 exclude=exclude or [],
                 toCamelCase=toCamelCase,
                 send_on_init=send_on_init,
@@ -139,7 +139,7 @@ def sync(
 
 def sync_all(
     key: str,
-    include: dict[str, str | EllipsisType] | None = None,
+    include: dict[str, str | EllipsisType] | list[str] | None = None,
     exclude: list[str] | None = None,
     toCamelCase: bool | None = None,
     send_on_init: bool = True,
@@ -161,7 +161,7 @@ def sync_all(
     return sync(
         key=key,
         sync_all=True,
-        include=include or {},
+        include=include,
         exclude=exclude or [],
         toCamelCase=toCamelCase,
         send_on_init=send_on_init,

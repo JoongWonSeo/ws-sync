@@ -5,9 +5,37 @@ from .sync import Sync
 
 
 class Synced:
-    """Mixin providing a ``sync`` attribute compatible with Pydantic models."""
+    """
+    A mixin class that provides a `sync` attribute in a way that is compatible with any pydantic BaseModel subclass.
 
-    model_config = ConfigDict()
+    Example with BaseModel:
+    ```python
+    class SyncedUser(Synced, BaseModel):
+        name: str
+        contacts: dict[str, str]
+
+        def model_post_init(self, context):
+            # create the sync object
+            self.sync = Sync.all(self, key="USER")
+
+    u = SyncedUser(name="John", contacts={"email": "john@example.com", "phone": "+1234567890"})
+    await u.sync()
+    ```
+
+    Example with custom BaseModel:
+    ```python
+    class MyBaseModel(BaseModel):
+        # custom configuration
+        pass
+
+    class SyncedUser(Synced, MyBaseModel):
+        name: str
+        contacts: dict[str, str]
+
+        def model_post_init(self, context):
+            self.sync = Sync.all(self, key="USER")
+    ```
+    """
 
     _sync: Sync = PrivateAttr()
 
