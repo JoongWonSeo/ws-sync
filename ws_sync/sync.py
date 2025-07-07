@@ -9,10 +9,10 @@ from types import EllipsisType
 from typing import Any, Literal, get_type_hints
 
 import jsonpatch
-from pydantic import BaseModel, TypeAdapter
+from pydantic import AliasGenerator, BaseModel, TypeAdapter
 
 from .session import session_context
-from .utils import toCamelCase
+from .utils import toCamelCase as toCamelCaseFn
 
 
 # Event Type Helpers
@@ -74,7 +74,7 @@ class Sync:
         key: str,
         include: dict[str, str | EllipsisType] | None = None,
         exclude: list[str] | None = None,
-        toCamelCase: bool = False,
+        toCamelCase: bool | None = None,
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
@@ -102,7 +102,7 @@ class Sync:
         cls,
         _obj: object,
         _key: str,
-        _toCamelCase: bool = False,
+        _toCamelCase: bool | None = None,
         _send_on_init: bool = True,
         _expose_running_tasks: bool = False,
         _logger: Logger | None = None,
@@ -133,7 +133,7 @@ class Sync:
         sync_all: bool = False,
         include: dict[str, str | EllipsisType] | None = None,
         exclude: list[str] | None = None,
-        toCamelCase: bool = False,
+        toCamelCase: bool | None = None,
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
@@ -152,7 +152,8 @@ class Sync:
             include: attribute names to sync, value being either ... or a string of the key of the attribute
             exclude: list of attributes to exclude from syncing
 
-            toCamelCase: whether to convert attribute names to camelCase
+            toCamelCase: convert attribute names to camelCase. Must be ``None`` for
+                Pydantic models, which should configure ``alias_generator``
             send_on_init: whether to send the state on connection init
             expose_running_tasks: whether to expose the running tasks to the frontend
             logger: logger to use for logging
@@ -165,8 +166,18 @@ class Sync:
         """
         self.obj = obj
         self.key = key
-        self.camelize = toCamelCase
         self.send_on_init = send_on_init
+        if isinstance(obj, BaseModel):
+            assert toCamelCase is None, (
+                "Use model_config.alias_generator for Pydantic models"
+            )
+            alias_gen = type(obj).model_config.get("alias_generator")
+            if isinstance(alias_gen, AliasGenerator):
+                self.casing_func = alias_gen.serialization_alias
+            else:
+                self.casing_func = alias_gen or (lambda x: x)
+        else:
+            self.casing_func = toCamelCase and toCamelCaseFn or (lambda x: x)
         self.task_exposure = (
             self.casing("running_tasks") if expose_running_tasks else None
         )
@@ -558,4 +569,4 @@ class Sync:
 
     # ========== Utils ========== #
     def casing(self, attr: str) -> str:
-        return toCamelCase(attr) if self.camelize else attr
+        return self.casing_func(attr)

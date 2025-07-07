@@ -98,7 +98,7 @@ def sync(
     sync_all: bool = False,
     include: dict[str, str | EllipsisType] | None = None,
     exclude: list[str] | None = None,
-    toCamelCase: bool = False,
+    toCamelCase: bool | None = None,
     send_on_init: bool = True,
     expose_running_tasks: bool = False,
     logger: Logger | None = None,
@@ -141,7 +141,7 @@ def sync_all(
     key: str,
     include: dict[str, str | EllipsisType] | None = None,
     exclude: list[str] | None = None,
-    toCamelCase: bool = False,
+    toCamelCase: bool | None = None,
     send_on_init: bool = True,
     expose_running_tasks: bool = False,
     logger: Logger | None = None,
@@ -172,7 +172,7 @@ def sync_all(
 
 def sync_only(
     _key: str,
-    _toCamelCase: bool = False,
+    _toCamelCase: bool | None = None,
     _send_on_init: bool = True,
     _expose_running_tasks: bool = False,
     _logger: Logger | None = None,
