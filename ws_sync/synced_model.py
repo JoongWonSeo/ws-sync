@@ -37,6 +37,11 @@ class Synced:
     ```
     """
 
+    model_config = ConfigDict(
+        # make fields with default values required in the JSON schema when mode="serialization"
+        json_schema_serialization_defaults_required=True,
+    )
+
     _sync: Sync = PrivateAttr()
 
     @property
@@ -51,7 +56,7 @@ class Synced:
 class SyncedAsCamelCase(Synced):
     """Synced base that serializes fields using camelCase."""
 
-    model_config = ConfigDict(
+    model_config = Synced.model_config | ConfigDict(
         alias_generator=AliasGenerator(serialization_alias=to_camel),
         serialize_by_alias=True,
     )
