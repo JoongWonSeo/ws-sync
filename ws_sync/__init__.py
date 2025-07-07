@@ -17,7 +17,8 @@ __all__ = [
     "Sync",
     "Session",
     "SessionState",
-    "HasSync",
+    "Synced",
+    "SyncedAsCamelCase",
     # globals
     "session_context",
     "get_user_session",
@@ -34,4 +35,4 @@ from .decorators import (
 from .id import get_user_session
 from .session import Session, SessionState, session_context
 from .sync import Sync
-from .synced_model import HasSync
+from .synced_model import Synced, SyncedAsCamelCase

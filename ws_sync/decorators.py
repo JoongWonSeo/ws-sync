@@ -96,9 +96,9 @@ from .sync import Sync
 def sync(
     key: str,
     sync_all: bool = False,
-    include: dict[str, str | EllipsisType] | None = None,
+    include: dict[str, str | EllipsisType] | list[str] | None = None,
     exclude: list[str] | None = None,
-    toCamelCase: bool = False,
+    toCamelCase: bool | None = None,
     send_on_init: bool = True,
     expose_running_tasks: bool = False,
     logger: Logger | None = None,
@@ -124,7 +124,7 @@ def sync(
                 obj=self,
                 key=key,
                 sync_all=sync_all,
-                include=include or {},
+                include=include,
                 exclude=exclude or [],
                 toCamelCase=toCamelCase,
                 send_on_init=send_on_init,
@@ -139,9 +139,9 @@ def sync(
 
 def sync_all(
     key: str,
-    include: dict[str, str | EllipsisType] | None = None,
+    include: dict[str, str | EllipsisType] | list[str] | None = None,
     exclude: list[str] | None = None,
-    toCamelCase: bool = False,
+    toCamelCase: bool | None = None,
     send_on_init: bool = True,
     expose_running_tasks: bool = False,
     logger: Logger | None = None,
@@ -161,7 +161,7 @@ def sync_all(
     return sync(
         key=key,
         sync_all=True,
-        include=include or {},
+        include=include,
         exclude=exclude or [],
         toCamelCase=toCamelCase,
         send_on_init=send_on_init,
@@ -172,7 +172,7 @@ def sync_all(
 
 def sync_only(
     _key: str,
-    _toCamelCase: bool = False,
+    _toCamelCase: bool | None = None,
     _send_on_init: bool = True,
     _expose_running_tasks: bool = False,
     _logger: Logger | None = None,
