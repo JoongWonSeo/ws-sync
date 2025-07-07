@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import traceback
 from asyncio import Lock
 from collections.abc import Callable
 from contextlib import suppress
@@ -140,9 +139,7 @@ class Session:
                     await self.state.on_connect()
             except Exception:
                 if self.logger:
-                    self.logger.error(
-                        f"Error while calling state.on_connect: {traceback.format_exc()}"
-                    )
+                    self.logger.exception("Error while calling state.on_connect")
 
             try:
                 while self.ws.application_state == WebSocketState.CONNECTED:
@@ -169,18 +166,14 @@ class Session:
                     self.logger.info("Websocket disconnected")
             except Exception:
                 if self.logger:
-                    self.logger.error(
-                        f"Error while handling connection: {traceback.format_exc()}"
-                    )
+                    self.logger.exception("Error while handling connection")
             finally:
                 try:
                     if self.state:
                         await self.state.on_disconnect()
                 except Exception:
                     if self.logger:
-                        self.logger.error(
-                            f"Error while calling state.on_disconnect: {traceback.format_exc()}"
-                        )
+                        self.logger.exception("Error while calling state.on_disconnect")
                 try:
                     ws = self.ws
                     self.ws = None
