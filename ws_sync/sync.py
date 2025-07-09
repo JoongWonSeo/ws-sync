@@ -262,7 +262,14 @@ class Sync:
         # observe all non-private attributes
         if sync_all:
             if isinstance(obj, BaseModel):
+                # Include regular fields
                 for field in type(obj).model_fields:
+                    if field in exclude:
+                        continue
+                    self.sync_attributes[field] = self.casing(field)
+
+                # Include computed fields
+                for field in type(obj).model_computed_fields:
                     if field in exclude:
                         continue
                     self.sync_attributes[field] = self.casing(field)

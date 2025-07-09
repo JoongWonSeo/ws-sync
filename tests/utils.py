@@ -3,7 +3,7 @@ Common test utilities and helper functions for ws-sync tests.
 """
 
 import jsonpatch
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from ws_sync.sync import Sync
 
@@ -40,3 +40,15 @@ class Company(BaseModel):
     name: str
     teams: list[Team]
     employees: dict[str, User]
+
+
+class UserWithComputedField(BaseModel):
+    """Test Pydantic model with computed field"""
+
+    name: str
+    age: int
+
+    @computed_field
+    @property
+    def display_name(self) -> str:
+        return f"{self.name} (age {self.age})"

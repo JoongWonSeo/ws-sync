@@ -9,7 +9,7 @@ import pytest
 from ws_sync import sync_all, sync_only
 from ws_sync.sync import Sync
 
-from .utils import Company, Team, User
+from .utils import Company, Team, User, UserWithComputedField
 
 # Test models are imported from .utils
 
@@ -304,3 +304,24 @@ class TestPydanticSync:
         assert "userCount" in snapshot
         assert "user_profile" not in snapshot
         assert "user_count" not in snapshot
+
+    def test_computed_fields_sync(self, mock_session: Mock):
+        """Test that computed fields are included in sync"""
+
+        user = UserWithComputedField(name="John", age=30)
+
+        # Direct sync test - this should fail with current implementation
+        user_sync = Sync.all(user, "USER_COMPUTED")
+
+        # Check sync attributes to see if computed field is included
+        assert "name" in user_sync.sync_attributes
+        assert "age" in user_sync.sync_attributes
+        # This should fail with the current implementation
+        assert "display_name" in user_sync.sync_attributes
+
+        # Test snapshot includes computed field
+        snapshot = user_sync._snapshot()
+        assert "name" in snapshot
+        assert "age" in snapshot
+        assert "display_name" in snapshot
+        assert snapshot["display_name"] == "John (age 30)"
