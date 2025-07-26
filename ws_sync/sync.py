@@ -328,7 +328,17 @@ class Sync:
         # Create TypeAdapters once for each synced attribute with type hints
         self.type_adapters: dict[str, TypeAdapter[Any]] = {}
         try:
-            type_hints = get_type_hints(type(obj))
+            # For Pydantic models, use unified field info; for others, use standard type hints
+            if isinstance(obj, BaseModel):
+                # Combine regular fields and computed fields for unified type mapping
+                type_hints = {}
+                for name, field in type(obj).model_fields.items():
+                    type_hints[name] = field.annotation
+                for name, field in type(obj).model_computed_fields.items():
+                    type_hints[name] = field.return_type
+            else:
+                type_hints = get_type_hints(type(obj))
+
             for attr_name in self.sync_attributes:
                 if attr_name in type_hints:
                     try:
@@ -514,25 +524,46 @@ class Sync:
             try:
                 setattr(self.obj, attr_name, value)
             except AttributeError:
-                # trying to set a property without setter (readonly), don't set
-                assert getattr(self.obj, attr_name) == value, (
-                    "Trying to set a readonly attribute"
-                )
+                # Check if this is a computed field without setter - if so, skip silently
+                if (
+                    isinstance(self.obj, BaseModel)
+                    and attr_name in type(self.obj).model_computed_fields
+                ):
+                    computed_field = type(self.obj).model_computed_fields[attr_name]
+                    if computed_field.wrapped_property.fset is None:
+                        # Read-only computed field - skip setting, it will be recalculated
+                        continue
+
+                # For other readonly attributes, skip setting
+                # Don't assert value equality because dependent properties may have changed
+                # when other attributes were set earlier in this loop
+                pass
 
         self.state_snapshot = new_state  # update latest snapshot
 
     async def _patch_state(self, patch: list[dict[str, Any]]):
-        # Apply patch to the snapshot first
+        # Apply patch to the snapshot first to update state tracking
         self.state_snapshot = jsonpatch.apply_patch(
             self.state_snapshot, patch, in_place=True
         )
 
-        for key, value in self.state_snapshot.items():
+        # Extract the keys that were actually modified by the patch
+        modified_keys = set()
+        for patch_op in patch:
+            path = patch_op["path"]
+            if path.startswith("/"):
+                # Extract the top-level key from the path
+                key = path.split("/")[1]
+                if key in self.key_to_attr:
+                    modified_keys.add(key)
+
+        # Only set attributes that were actually modified by the patch
+        for key in modified_keys:
             if key == self.task_exposure:
                 continue
 
             attr_name = self.key_to_attr[key]
-            value = deepcopy(value)
+            value = deepcopy(self.state_snapshot[key])
 
             if attr_name in self.type_adapters:
                 value = self.type_adapters[attr_name].validate_python(value)
@@ -540,10 +571,20 @@ class Sync:
             try:
                 setattr(self.obj, attr_name, value)
             except AttributeError:
-                # trying to set a property without setter (readonly), don't set
-                assert getattr(self.obj, attr_name) == value, (
-                    "Trying to set a readonly attribute"
-                )
+                # Check if this is a computed field without setter - if so, skip silently
+                if (
+                    isinstance(self.obj, BaseModel)
+                    and attr_name in type(self.obj).model_computed_fields
+                ):
+                    computed_field = type(self.obj).model_computed_fields[attr_name]
+                    if computed_field.wrapped_property.fset is None:
+                        # Read-only computed field - skip setting, it will be recalculated
+                        continue
+
+                # For other readonly attributes, skip setting
+                # Don't assert value equality because dependent properties may have changed
+                # when other attributes were set earlier in this loop
+                pass
 
     @staticmethod
     def _create_action_handler(

@@ -9,7 +9,13 @@ import pytest
 from ws_sync import sync_all, sync_only
 from ws_sync.sync import Sync
 
-from .utils import Company, Team, User, UserWithComputedField
+from .utils import (
+    Company,
+    Team,
+    User,
+    UserWithComputedField,
+    UserWithWritableComputedField,
+)
 
 # Test models are imported from .utils
 
@@ -325,3 +331,175 @@ class TestPydanticSync:
         assert "age" in snapshot
         assert "display_name" in snapshot
         assert snapshot["display_name"] == "John (age 30)"
+
+    @pytest.mark.asyncio
+    async def test_computed_field_updates_on_dependency_change(
+        self, mock_session: Mock
+    ):
+        """Test that computed fields update when their dependencies change via patches"""
+
+        user = UserWithComputedField(name="John", age=30)
+        user_sync = Sync.all(user, "USER_COMPUTED")
+
+        # Apply patch to change age (dependency of computed field)
+        await user_sync._patch_state([{"op": "replace", "path": "/age", "value": 35}])
+
+        # Verify the regular field was updated
+        assert user.age == 35
+        # Computed field should automatically reflect the change
+        assert user.display_name == "John (age 35)"
+
+    @pytest.mark.asyncio
+    async def test_computed_field_type_adapter_deserialization(
+        self, mock_session: Mock
+    ):
+        """Test that computed fields use type adapters for proper deserialization"""
+
+        class UserContainer:
+            sync: Sync
+            user: UserWithComputedField
+
+            @sync_all("USER_COMPUTED_CONTAINER")
+            def __init__(self):
+                self.user: UserWithComputedField = UserWithComputedField(
+                    name="Initial", age=0
+                )
+
+        container = UserContainer()
+
+        # Set new state from frontend
+        new_state = {
+            "user": {
+                "name": "Jane",
+                "age": "25",
+            }  # age as string, should be coerced to int
+        }
+
+        await container.sync._set_state(new_state)
+
+        # Verify proper deserialization with type coercion
+        assert isinstance(container.user, UserWithComputedField)
+        assert container.user.name == "Jane"
+        assert isinstance(container.user.age, int)
+        assert container.user.age == 25
+        # Computed field should reflect the changes
+        assert container.user.display_name == "Jane (age 25)"
+
+    @pytest.mark.asyncio
+    async def test_computed_field_complex_nested_deserialization(
+        self, mock_session: Mock
+    ):
+        """Test computed fields work correctly with complex nested structures during deserialization"""
+
+        class UserListContainer:
+            sync: Sync
+            users: list[UserWithComputedField]
+
+            @sync_all("USER_COMPUTED_LIST")
+            def __init__(self):
+                self.users: list[UserWithComputedField] = []
+
+        container = UserListContainer()
+
+        # Set state with list of users having computed fields
+        new_state = {
+            "users": [
+                {"name": "Alice", "age": 30},
+                {"name": "Bob", "age": "25"},  # Test string coercion
+            ]
+        }
+
+        await container.sync._set_state(new_state)
+
+        # Verify proper deserialization of list elements
+        assert len(container.users) == 2
+        assert all(isinstance(user, UserWithComputedField) for user in container.users)
+
+        # Check first user
+        assert container.users[0].name == "Alice"
+        assert container.users[0].age == 30
+        assert container.users[0].display_name == "Alice (age 30)"
+
+        # Check second user (with type coercion)
+        assert container.users[1].name == "Bob"
+        assert isinstance(container.users[1].age, int)
+        assert container.users[1].age == 25
+        assert container.users[1].display_name == "Bob (age 25)"
+
+    @pytest.mark.asyncio
+    async def test_writable_computed_field_patch_deserialization(
+        self, mock_session: Mock
+    ):
+        """Test that writable computed fields can be set via patches and use type adapters"""
+
+        user = UserWithWritableComputedField(first_name="John", last_name="Doe")
+        user_sync = Sync.all(user, "USER_WRITABLE_COMPUTED")
+
+        # Apply patch to writable computed field
+        await user_sync._patch_state(
+            [{"op": "replace", "path": "/full_name", "value": "Jane Smith"}]
+        )
+
+        # Verify the setter was called and underlying fields were updated
+        assert user.first_name == "Jane"
+        assert user.last_name == "Smith"
+        assert user.full_name == "Jane Smith"
+
+    @pytest.mark.asyncio
+    async def test_writable_computed_field_set_state_deserialization(
+        self, mock_session: Mock
+    ):
+        """Test that writable computed fields work correctly in set_state"""
+
+        class UserContainer:
+            sync: Sync
+            user: UserWithWritableComputedField
+
+            @sync_all("USER_WRITABLE_CONTAINER")
+            def __init__(self):
+                self.user: UserWithWritableComputedField = (
+                    UserWithWritableComputedField(
+                        first_name="Initial", last_name="User"
+                    )
+                )
+
+        container = UserContainer()
+
+        # Set state with writable computed field - order matters!
+        new_state = {
+            "user": {
+                "full_name": "Bob Wilson",  # Process this first to set the base names
+                "first_name": "Alice",  # This will override first_name after the setter
+                "last_name": "Johnson",  # This will override last_name after the setter
+            }
+        }
+
+        await container.sync._set_state(new_state)
+
+        # Verify proper deserialization and field order processing
+        assert isinstance(container.user, UserWithWritableComputedField)
+        # Fields are processed in order, so last values win
+        assert container.user.first_name == "Alice"
+        assert container.user.last_name == "Johnson"
+        assert container.user.full_name == "Alice Johnson"
+
+    @pytest.mark.asyncio
+    async def test_writable_computed_field_type_validation(self, mock_session: Mock):
+        """Test that writable computed fields use type adapters for validation"""
+
+        # Test directly on the model, not through a container
+        user = UserWithWritableComputedField(first_name="John", last_name="Doe")
+        user_sync = Sync.all(user, "USER_WRITABLE_VALIDATION")
+
+        # Test that type adapter validates string input for computed field
+        await user_sync._patch_state(
+            [{"op": "replace", "path": "/full_name", "value": "Jane Smith"}]
+        )
+
+        # Verify proper string handling and setter invocation
+        assert isinstance(user.full_name, str)
+        assert user.full_name == "Jane Smith"
+        assert isinstance(user.first_name, str)
+        assert user.first_name == "Jane"
+        assert isinstance(user.last_name, str)
+        assert user.last_name == "Smith"

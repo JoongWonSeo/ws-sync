@@ -44,6 +44,19 @@ class ChildClass(ParentClass):
         self.shared_field = "shared_child"  # Override parent field
 
 
+class ClassWithDependentProperty:
+    """Class with a property that depends on other attributes"""
+
+    def __init__(self):
+        self.first_name = "John"
+        self.last_name = "Doe"
+
+    @property
+    def full_name(self):
+        """Property that depends on first_name and last_name"""
+        return f"{self.first_name} {self.last_name}"
+
+
 # Test classes for Synced BaseModel patterns
 
 
@@ -481,3 +494,71 @@ class TestPartialSyncPatching:
         assert len(patch) == 1
         assert patch[0]["path"] == "/child_field"
         assert patch[0]["value"] == "new_child"
+
+    @pytest.mark.asyncio
+    async def test_dependent_property_set_state_works_correctly(
+        self, mock_session: Mock
+    ):
+        """Test that dependent properties work correctly with _set_state after fixing readonly assertion"""
+        obj = ClassWithDependentProperty()
+        sync = Sync.all(obj, key="TEST_DEPENDENT")
+
+        # Check that full_name is included in sync attributes
+        print(f"Sync attributes: {sync.sync_attributes}")
+        print(f"Initial full_name: {obj.full_name}")
+
+        # Initial state
+        assert obj.first_name == "John"
+        assert obj.last_name == "Doe"
+        assert obj.full_name == "John Doe"
+
+        # First, let's create a scenario that should trigger the readonly assertion
+        # We need to modify the snapshot to include the full_name property
+        snapshot = sync._snapshot()
+        print(f"Snapshot: {snapshot}")
+
+        # Now test with _set_state which should trigger the readonly assertion
+        # When we set first_name to "Jane", the full_name property will automatically change to "Jane Doe"
+        # But _set_state will also try to set full_name to its old snapshot value "John Doe"
+        # This should trigger the readonly assertion because the property can't be set to "John Doe"
+        # after first_name has been changed to "Jane"
+
+        # The issue occurs when the dependent property is processed AFTER its dependencies
+        # In Python 3.7+, dict maintains insertion order, so let's set first_name first
+        # which will change full_name to "Jane Doe", then try to set full_name to "John Doe"
+        new_state = {
+            "first_name": "Jane",  # This changes full_name to "Jane Doe"
+            "last_name": "Doe",  # This keeps full_name as "Jane Doe"
+            "full_name": "John Doe",  # This tries to set full_name to "John Doe", but it's "Jane Doe"
+        }
+
+        # This should now work correctly after removing the problematic readonly assertion
+        await sync._set_state(new_state)
+
+        # Verify that the dependent property reflects the actual state based on its dependencies
+        assert obj.first_name == "Jane"
+        assert obj.last_name == "Doe"
+        assert (
+            obj.full_name == "Jane Doe"
+        )  # Property calculated from first_name + last_name
+
+    @pytest.mark.asyncio
+    async def test_dependent_property_changes_with_dependency_update(
+        self, mock_session: Mock
+    ):
+        """Test that dependent properties automatically update when dependencies change"""
+        obj = ClassWithDependentProperty()
+        # No sync needed for this test - just demonstrating property behavior
+
+        # Initial state
+        assert obj.first_name == "John"
+        assert obj.last_name == "Doe"
+        assert obj.full_name == "John Doe"
+
+        # Change first_name directly (not via sync) to see property behavior
+        obj.first_name = "Jane"
+        assert obj.full_name == "Jane Doe"  # Property automatically updates
+
+        # This demonstrates why the readonly assertion is problematic:
+        # When we set first_name = "Jane", the full_name property changes from "John Doe" to "Jane Doe"
+        # But the sync system expects full_name to remain "John Doe" (the old snapshot value)

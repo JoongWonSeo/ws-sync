@@ -52,3 +52,21 @@ class UserWithComputedField(BaseModel):
     @property
     def display_name(self) -> str:
         return f"{self.name} (age {self.age})"
+
+
+class UserWithWritableComputedField(BaseModel):
+    """Test Pydantic model with writable computed field"""
+
+    first_name: str
+    last_name: str
+
+    @computed_field
+    @property
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+    @full_name.setter
+    def full_name(self, value: str) -> None:
+        parts = value.split(" ", 1)
+        self.first_name = parts[0]
+        self.last_name = parts[1] if len(parts) > 1 else ""
