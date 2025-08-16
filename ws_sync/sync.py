@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import warnings
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
 from logging import Logger
 from time import time
@@ -9,7 +9,9 @@ from types import EllipsisType
 from typing import Any, Literal, get_type_hints
 
 import jsonpatch
-from pydantic import AliasGenerator, BaseModel, TypeAdapter
+from pydantic import AliasGenerator, BaseModel, ConfigDict, TypeAdapter
+from pydantic.alias_generators import to_camel
+from pydantic_core import SchemaValidator
 
 from .session import session_context
 from .utils import toCamelCase as toCamelCaseFn
@@ -78,9 +80,9 @@ class Sync:
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
-        actions: dict[str, Callable[..., Any]] | None = None,
-        tasks: dict[str, Callable[..., Awaitable[Any]]] | None = None,
-        task_cancels: dict[str, Callable[..., Awaitable[Any]]] | None = None,
+        actions: Mapping[str, Callable[..., Any]] | None = None,
+        tasks: Mapping[str, Callable[..., Awaitable[Any]]] | None = None,
+        task_cancels: Mapping[str, Callable[..., Awaitable[Any]]] | None = None,
     ) -> "Sync":
         return cls(
             obj=obj,
@@ -106,9 +108,9 @@ class Sync:
         _send_on_init: bool = True,
         _expose_running_tasks: bool = False,
         _logger: Logger | None = None,
-        _actions: dict[str, Callable[..., Any]] | None = None,
-        _tasks: dict[str, Callable[..., Awaitable[Any]]] | None = None,
-        _task_cancels: dict[str, Callable[..., Awaitable[Any]]] | None = None,
+        _actions: Mapping[str, Callable[..., Any]] | None = None,
+        _tasks: Mapping[str, Callable[..., Awaitable[Any]]] | None = None,
+        _task_cancels: Mapping[str, Callable[..., Awaitable[Any]]] | None = None,
         **sync_attributes: str | EllipsisType,
     ) -> "Sync":
         return cls(
@@ -137,9 +139,9 @@ class Sync:
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
-        actions: dict[str, Callable[..., Any]] | None = None,
-        tasks: dict[str, Callable[..., Awaitable[Any]]] | None = None,
-        task_cancels: dict[str, Callable[..., Awaitable[Any]]] | None = None,
+        actions: Mapping[str, Callable[..., Any]] | None = None,
+        tasks: Mapping[str, Callable[..., Awaitable[Any]]] | None = None,
+        task_cancels: Mapping[str, Callable[..., Awaitable[Any]]] | None = None,
     ):
         """
         Register the attributes that should be synced with the frontend.
@@ -222,6 +224,55 @@ class Sync:
             except AttributeError:
                 pass
 
+        # ========== Create Action Type Adapters ========== #
+        # Create TypeAdapters for action parameter validation
+        self.action_type_adapters: dict[str, TypeAdapter[Any]] = {}
+        self.action_args_validators: dict[str, Any] = {}
+
+        # Configure TypeAdapter with appropriate alias generator for camelCase conversion
+        config = ConfigDict()
+        if isinstance(self.obj, BaseModel):
+            # For BaseModel, we need to extract the actual alias function
+            alias_gen = type(self.obj).model_config.get("alias_generator")
+            if isinstance(alias_gen, AliasGenerator):
+                # For function parameter validation, we want to use the same transformation
+                # that converts snake_case field names to the alias (e.g., camelCase)
+                alias_function = (
+                    alias_gen.serialization_alias
+                    or alias_gen.alias
+                    or alias_gen.validation_alias
+                )
+                if alias_function:
+                    config["alias_generator"] = alias_function  # type: ignore
+            elif alias_gen:
+                # Direct function
+                config["alias_generator"] = alias_gen
+        elif self.casing_func == toCamelCaseFn:
+            # Use camelCase conversion for non-BaseModel objects when toCamelCase is True
+            config["alias_generator"] = to_camel
+
+        for action_name, handler in actions.items():
+            # Create TypeAdapter for the callable handler with proper config
+            action_adapter = TypeAdapter(handler, config=config)
+            self.action_type_adapters[action_name] = action_adapter
+
+            # Extract the arguments schema to create a validator that returns (args, kwargs)
+            # instead of calling the function
+            args_schema = action_adapter.core_schema.get("arguments_schema")
+            if (
+                not args_schema
+                and action_adapter.core_schema.get("type") == "definitions"
+            ):
+                # Handle definitions schema structure
+                inner_schema = action_adapter.core_schema.get("schema", {})
+                args_schema = inner_schema.get("arguments_schema")
+
+            if args_schema:
+                self.action_args_validators[action_name] = SchemaValidator(
+                    args_schema  # type: ignore
+                )
+
+        # Create action handler after TypeAdapters are ready
         self.actions = self._create_action_handler(actions)
 
         # ========== Find task handlers ========== #
@@ -246,12 +297,53 @@ class Sync:
             except AttributeError:
                 pass
 
+        # ========== Create Task Type Adapters ========== #
+        # Create TypeAdapters for task parameter validation
+        self.task_type_adapters: dict[str, TypeAdapter[Any]] = {}
+        self.task_args_validators: dict[str, Any] = {}
         if tasks:
-            self.tasks, self.task_cancels = self._create_task_handlers(
-                tasks, task_cancels
-            )
-        else:
-            self.tasks, self.task_cancels = None, None
+            # Configure TypeAdapter with appropriate alias generator for camelCase conversion
+            config = ConfigDict()
+            if isinstance(self.obj, BaseModel):
+                # For BaseModel, we need to extract the actual alias function
+                alias_gen = type(self.obj).model_config.get("alias_generator")
+                if isinstance(alias_gen, AliasGenerator):
+                    # For function parameter validation, we want to use the same transformation
+                    # that converts snake_case field names to the alias (e.g., camelCase)
+                    alias_function = (
+                        alias_gen.serialization_alias
+                        or alias_gen.alias
+                        or alias_gen.validation_alias
+                    )
+                    if alias_function:
+                        config["alias_generator"] = alias_function  # type: ignore
+                elif alias_gen:
+                    # Direct function
+                    config["alias_generator"] = alias_gen
+            elif self.casing_func == toCamelCaseFn:
+                # Use camelCase conversion for non-BaseModel objects when toCamelCase is True
+                config["alias_generator"] = to_camel
+
+            for task_name, handler in tasks.items():
+                # Create TypeAdapter for the callable task handler with proper config
+                task_adapter = TypeAdapter(handler, config=config)
+                self.task_type_adapters[task_name] = task_adapter
+
+                # Extract the arguments schema to create a validator that returns (args, kwargs)
+                args_schema = task_adapter.core_schema.get("arguments_schema")
+                if (
+                    not args_schema
+                    and task_adapter.core_schema.get("type") == "definitions"
+                ):
+                    # Handle definitions schema structure
+                    inner_schema = task_adapter.core_schema.get("schema", {})
+                    args_schema = inner_schema.get("arguments_schema")
+
+                if args_schema:
+                    self.task_args_validators[task_name] = SchemaValidator(
+                        args_schema  # type: ignore
+                    )
+        self.tasks, self.task_cancels = self._create_task_handlers(tasks, task_cancels)
 
         # store running tasks
         self.running_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -586,14 +678,31 @@ class Sync:
                 # when other attributes were set earlier in this loop
                 pass
 
-    @staticmethod
     def _create_action_handler(
-        handlers: dict[str, Callable[..., Any]],
+        self,
+        handlers: Mapping[str, Callable[..., Any]],
     ) -> Callable[[dict[str, Any]], Awaitable[None]]:
         async def _handle_action(action: dict):
             action_type = action.pop("type")
             if action_type in handlers:
-                await handlers[action_type](**action)
+                # Validate and convert action parameters using arguments validator if available
+                if action_type in self.action_args_validators:
+                    try:
+                        # Use arguments validator to validate and convert the action parameters
+                        # This returns (args, kwargs) without calling the function
+                        args, kwargs = self.action_args_validators[
+                            action_type
+                        ].validate_python(action)
+                        await handlers[action_type](*args, **kwargs)
+                    except (ValueError, TypeError) as e:
+                        if self.logger:
+                            self.logger.error(
+                                f"Action {action_type} validation failed: {e}"
+                            )
+                        raise
+                else:
+                    # Fallback to original behavior if no validator available
+                    await handlers[action_type](**action)
             else:
                 warnings.warn(f"No handler for action {action_type}")
 
@@ -601,8 +710,8 @@ class Sync:
 
     def _create_task_handlers(
         self,
-        factories: dict[str, Callable[..., Awaitable[Any]]],
-        on_cancel: dict[str, Callable[..., Awaitable[Any]]] | None,
+        factories: Mapping[str, Callable[..., Awaitable[Any]]],
+        on_cancel: Mapping[str, Callable[..., Awaitable[Any]]] | None,
     ) -> tuple[
         Callable[[dict[str, Any]], Awaitable[None]],
         Callable[[dict[str, Any]], Awaitable[None]],
@@ -625,7 +734,25 @@ class Sync:
             task_type = task_args.pop("type")
             if task_type in factories:
                 if task_type not in self.running_tasks:
-                    todo = factories[task_type](**task_args)
+                    # Validate and convert task parameters using arguments validator if available
+                    if task_type in self.task_args_validators:
+                        try:
+                            # Use arguments validator to validate and convert the task parameters
+                            # This returns (args, kwargs) without calling the function
+                            args, kwargs = self.task_args_validators[
+                                task_type
+                            ].validate_python(task_args)
+                            todo = factories[task_type](*args, **kwargs)
+                        except (ValueError, TypeError) as e:
+                            if self.logger:
+                                self.logger.error(
+                                    f"Task {task_type} validation failed: {e}"
+                                )
+                            raise
+                    else:
+                        # Fallback to original behavior if no validator available
+                        todo = factories[task_type](**task_args)
+
                     task = asyncio.create_task(_run_and_pop(todo, task_type))
                     self.running_tasks[task_type] = task
                     if self.task_exposure:
