@@ -1,4 +1,6 @@
-from pydantic import AliasGenerator, ConfigDict, PrivateAttr
+from typing import ClassVar
+
+from pydantic import AliasGenerator, ConfigDict, PrivateAttr, TypeAdapter
 from pydantic.alias_generators import to_camel
 
 from .sync import Sync
@@ -42,6 +44,15 @@ class Synced:
         json_schema_serialization_defaults_required=True,
     )
 
+    field_validators: ClassVar[dict[str, TypeAdapter]] = {}
+    """Maps the field names to the TypeAdapter validator for the field."""
+
+    action_validators: ClassVar[dict[str, TypeAdapter]] = {}
+    """Maps the remote_action keys to the TypeAdapter validator for the action handler."""
+
+    task_validators: ClassVar[dict[str, TypeAdapter]] = {}
+    """Maps the remote_task keys to the TypeAdapter validator for the task handler."""
+
     _sync: Sync = PrivateAttr()
 
     @property
@@ -51,6 +62,11 @@ class Synced:
     @sync.setter
     def sync(self, value: Sync):
         self._sync = value
+
+    # ===== Class-level validator creation ===== #
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # TODO: call the static builders for field_validators, action_validators, and task_validators
 
 
 class SyncedAsCamelCase(Synced):

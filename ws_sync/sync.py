@@ -1,19 +1,19 @@
 import asyncio
 import base64
 import warnings
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Callable as AbcCallable
 from copy import deepcopy
 from logging import Logger
 from time import time
 from types import EllipsisType
-from typing import Any, Literal, get_type_hints
+from typing import Any, Literal, cast, get_type_hints
 
 import jsonpatch
-from pydantic import AliasGenerator, BaseModel, ConfigDict, TypeAdapter
+from pydantic import AliasGenerator, BaseModel, ConfigDict, TypeAdapter, create_model
 from pydantic.alias_generators import to_camel
 
 from .session import session_context
-from .utils import toCamelCase as toCamelCaseFn
 
 
 # Event Type Helpers
@@ -168,20 +168,11 @@ class Sync:
         self.obj = obj
         self.key = key
         self.send_on_init = send_on_init
-        self.casing_func: Callable[[str], str]
-        if isinstance(obj, BaseModel):
-            assert toCamelCase is None, (
-                "Use model_config.alias_generator for Pydantic models"
-            )
-            alias_gen = type(obj).model_config.get("alias_generator")
-            if isinstance(alias_gen, AliasGenerator):
-                self.casing_func = (
-                    alias_gen.serialization_alias or alias_gen.alias or (lambda x: x)
-                )
-            else:
-                self.casing_func = alias_gen or (lambda x: x)
-        else:
-            self.casing_func = toCamelCaseFn if toCamelCase else (lambda x: x)
+        self.casing_func = (
+            self.get_alias_function_for_class(type(self.obj))
+            if isinstance(self.obj, BaseModel)
+            else (to_camel if toCamelCase else None)
+        )
         self.task_exposure = (
             self.casing("running_tasks") if expose_running_tasks else None
         )
@@ -223,45 +214,21 @@ class Sync:
             except AttributeError:
                 pass
 
-        # ========== Create Action Type Adapters ========== #
-        # Create TypeAdapters for action parameter validation
-        self.action_type_adapters: dict[str, TypeAdapter[Any]] = {}
-
-        # Configure TypeAdapter with appropriate alias generator for camelCase conversion
-        config = ConfigDict()
-        if isinstance(self.obj, BaseModel):
-            # For BaseModel, we need to extract the actual alias function
-            alias_gen = type(self.obj).model_config.get("alias_generator")
-            if isinstance(alias_gen, AliasGenerator):
-                # For function parameter validation, we want to use the same transformation
-                # that converts snake_case field names to the alias (e.g., camelCase)
-                alias_function = (
-                    alias_gen.serialization_alias
-                    or alias_gen.alias
-                    or alias_gen.validation_alias
-                )
-                if alias_function:
-                    config["alias_generator"] = alias_function  # type: ignore
-            elif alias_gen:
-                # Direct function
-                config["alias_generator"] = alias_gen
-        elif self.casing_func == toCamelCaseFn:
-            # Use camelCase conversion for non-BaseModel objects when toCamelCase is True
-            config["alias_generator"] = to_camel
-
+        # ========== Create Action Validators (cached) ========== #
+        self.action_validators: dict[str, TypeAdapter[Any]] = (
+            self.build_action_validators(type(self.obj), self.casing_func)
+        )
         for action_name, handler in actions.items():
-            # Create TypeAdapter for the callable handler with proper config
-            action_adapter = TypeAdapter(handler, config=config)
-            self.action_type_adapters[action_name] = action_adapter
+            if action_name not in self.action_validators:
+                model = self.build_kwargs_model(
+                    type(self.obj),
+                    f"{type(self.obj).__name__}Action_{action_name}",
+                    handler,
+                    self.casing_func,
+                )
+                self.action_validators[action_name] = TypeAdapter(model)
 
-            # Since the TypeAdapter also calls the function, it's already the handler itself
-            # Use closure to capture action_adapter by value, not reference
-            def make_action_wrapper(adapter):
-                return lambda **kwargs: adapter.validate_python(kwargs)
-
-            actions[action_name] = make_action_wrapper(action_adapter)
-
-        # Create action handler after TypeAdapters are ready
+        # Create action handler after validators are ready
         self.actions = self._create_action_handler(actions)
 
         # ========== Find task handlers ========== #
@@ -286,43 +253,19 @@ class Sync:
             except AttributeError:
                 pass
 
-        # ========== Create Task Type Adapters ========== #
-        # Create TypeAdapters for task parameter validation
-        self.task_type_adapters: dict[str, TypeAdapter[Any]] = {}
-        if tasks:
-            # Configure TypeAdapter with appropriate alias generator for camelCase conversion
-            config = ConfigDict()
-            if isinstance(self.obj, BaseModel):
-                # For BaseModel, we need to extract the actual alias function
-                alias_gen = type(self.obj).model_config.get("alias_generator")
-                if isinstance(alias_gen, AliasGenerator):
-                    # For function parameter validation, we want to use the same transformation
-                    # that converts snake_case field names to the alias (e.g., camelCase)
-                    alias_function = (
-                        alias_gen.serialization_alias
-                        or alias_gen.alias
-                        or alias_gen.validation_alias
-                    )
-                    if alias_function:
-                        config["alias_generator"] = alias_function  # type: ignore
-                elif alias_gen:
-                    # Direct function
-                    config["alias_generator"] = alias_gen
-            elif self.casing_func == toCamelCaseFn:
-                # Use camelCase conversion for non-BaseModel objects when toCamelCase is True
-                config["alias_generator"] = to_camel
-
-            for task_name, handler in tasks.items():
-                # Create TypeAdapter for the callable task handler with proper config
-                task_adapter = TypeAdapter(handler, config=config)
-                self.task_type_adapters[task_name] = task_adapter
-
-                # Since the TypeAdapter also calls the function, it's already the handler itself
-                # Use closure to capture task_adapter by value, not reference
-                def make_task_wrapper(adapter):
-                    return lambda **kwargs: adapter.validate_python(kwargs)
-
-                tasks[task_name] = make_task_wrapper(task_adapter)
+        # ========== Create Task Validators (cached) ========== #
+        self.task_validators: dict[str, TypeAdapter[Any]] = self.build_task_validators(
+            type(self.obj), self.casing_func
+        )
+        for task_name, handler in tasks.items():
+            if task_name not in self.task_validators:
+                model = self.build_kwargs_model(
+                    type(self.obj),
+                    f"{type(self.obj).__name__}Task_{task_name}",
+                    handler,
+                    self.casing_func,
+                )
+                self.task_validators[task_name] = TypeAdapter(model)
 
         self.tasks, self.task_cancels = self._create_task_handlers(tasks, task_cancels)
 
@@ -330,7 +273,7 @@ class Sync:
         self.running_tasks: dict[str, asyncio.Task[Any]] = {}
 
         # ========== Find attributes to sync ========== #
-        self.sync_attributes = {}
+        self.sync_attributes: dict[str, str] = {}
 
         # observe all non-private attributes
         if sync_all:
@@ -397,35 +340,10 @@ class Sync:
                 except AttributeError:
                     pass
 
-        # ========== Type Adapters ========== #
-        # Create TypeAdapters once for each synced attribute with type hints
-        self.type_adapters: dict[str, TypeAdapter[Any]] = {}
-        try:
-            # For Pydantic models, use unified field info; for others, use standard type hints
-            if isinstance(obj, BaseModel):
-                # Combine regular fields and computed fields for unified type mapping
-                type_hints = {}
-                for name, field in type(obj).model_fields.items():
-                    type_hints[name] = field.annotation
-                for name, field in type(obj).model_computed_fields.items():
-                    type_hints[name] = field.return_type
-            else:
-                type_hints = get_type_hints(type(obj))
-
-            for attr_name in self.sync_attributes:
-                if attr_name in type_hints:
-                    try:
-                        self.type_adapters[attr_name] = TypeAdapter(
-                            type_hints[attr_name]
-                        )
-                    except (TypeError, ValueError) as e:
-                        if self.logger:
-                            self.logger.warning(
-                                f"Failed to create TypeAdapter for {attr_name}: {e}"
-                            )
-        except (TypeError, NameError) as e:
-            if self.logger:
-                self.logger.warning(f"Failed to get type hints: {e}")
+        # ========== Field Type Adapters (cached) ========== #
+        self.type_adapters: dict[str, TypeAdapter[Any]] = self.build_field_validators(
+            type(obj), field_whitelist=self.sync_attributes.keys()
+        )
 
         # ========== State Management ========== #
         # the snapshot is the exact state that the frontend has, for patching
@@ -666,7 +584,21 @@ class Sync:
         async def _handle_action(action: dict):
             action_type = action.pop("type")
             if action_type in handlers:
-                await handlers[action_type](**action)
+                if action_type in self.action_validators:
+                    validated = self.action_validators[action_type].validate_python(
+                        action
+                    )
+                    if isinstance(validated, BaseModel):
+                        # Extract native Python objects (BaseModel/dataclass/etc.)
+                        kwargs = {
+                            name: getattr(validated, name)
+                            for name in type(validated).model_fields
+                        }
+                    else:
+                        kwargs = validated  # already a dict-like structure
+                else:
+                    kwargs = action
+                await handlers[action_type](**kwargs)
             else:
                 warnings.warn(f"No handler for action {action_type}")
 
@@ -698,7 +630,20 @@ class Sync:
             task_type = task_args.pop("type")
             if task_type in factories:
                 if task_type not in self.running_tasks:
-                    todo = factories[task_type](**task_args)
+                    if task_type in self.task_validators:
+                        validated = self.task_validators[task_type].validate_python(
+                            task_args
+                        )
+                        if isinstance(validated, BaseModel):
+                            kwargs = {
+                                name: getattr(validated, name)
+                                for name in type(validated).model_fields
+                            }
+                        else:
+                            kwargs = validated
+                    else:
+                        kwargs = task_args
+                    todo = factories[task_type](**kwargs)
                     task = asyncio.create_task(_run_and_pop(todo, task_type))
                     self.running_tasks[task_type] = task
                     if self.task_exposure:
@@ -721,4 +666,156 @@ class Sync:
 
     # ========== Utils ========== #
     def casing(self, attr: str) -> str:
-        return self.casing_func(attr)
+        return self.casing_func(attr) if self.casing_func else attr
+
+    # ========== Static validator builders with caching ========== #
+    _field_validators_cache: dict[type, dict[str, TypeAdapter[Any]]] = {}
+    _action_validators_cache: dict[
+        tuple[type, object | None], dict[str, TypeAdapter[Any]]
+    ] = {}
+    _task_validators_cache: dict[
+        tuple[type, object | None], dict[str, TypeAdapter[Any]]
+    ] = {}
+
+    @staticmethod
+    def get_alias_function_for_class(
+        target_cls: type,
+    ) -> AbcCallable[[str], str] | None:
+        if issubclass(target_cls, BaseModel):
+            alias_gen = getattr(target_cls, "model_config", {}).get("alias_generator")
+            if isinstance(alias_gen, AliasGenerator):
+                fn = alias_gen.serialization_alias or alias_gen.alias
+                return cast(AbcCallable[[str], str] | None, fn)
+            if callable(alias_gen):
+                return cast(AbcCallable[[str], str], alias_gen)
+        return None
+
+    @staticmethod
+    def build_kwargs_model(
+        target_cls: type,
+        model_name: str,
+        func: Callable[..., Any],
+        alias_function: AbcCallable[[str], str] | AliasGenerator | None,
+    ) -> type[BaseModel]:
+        from inspect import Parameter, signature
+
+        sig = signature(func)
+        fields: dict[str, tuple[Any, Any]] = {}
+        for idx, (param_name, param) in enumerate(sig.parameters.items()):
+            if idx == 0 and param_name == "self":
+                continue
+            if param.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD):
+                continue
+            annotation = (
+                param.annotation if param.annotation is not Parameter.empty else Any
+            )
+            default = param.default if param.default is not Parameter.empty else ...
+            fields[param_name] = (annotation, default)
+
+        cfg = ConfigDict(alias_generator=alias_function, populate_by_name=True)  # type: ignore[arg-type]
+        model = create_model(  # type: ignore[call-overload]
+            model_name,
+            __config__=cfg,  # type: ignore[arg-type]
+            __module__=target_cls.__module__,
+            **cast(dict[str, Any], fields),
+        )
+        return model
+
+    @staticmethod
+    def build_field_validators(
+        target_cls: type,
+        field_whitelist: Iterable[str] | None = None,
+        use_cache: bool = True,
+    ) -> dict[str, TypeAdapter[Any]]:
+        """
+        Build a dictionary of field validators for a given class.
+
+        Args:
+            target_cls: The class to build validators for.
+            field_whitelist: A list of field names to include in the validators. If None, all fields are included.
+            use_cache: Whether to use the cache.
+        """
+        if use_cache and target_cls in Sync._field_validators_cache:
+            return Sync._field_validators_cache[target_cls]
+
+        validators: dict[str, TypeAdapter[Any]] = {}
+        if issubclass(target_cls, BaseModel):
+            for name, field in target_cls.model_fields.items():
+                validators[name] = TypeAdapter(field.annotation)
+            for name, field in target_cls.model_computed_fields.items():
+                validators[name] = TypeAdapter(field.return_type)
+        else:
+            type_hints = get_type_hints(target_cls)
+            if field_whitelist is not None:
+                type_hints = {
+                    field: annotation
+                    for field in field_whitelist
+                    if (annotation := type_hints.get(field))
+                }
+            for name, annotation in type_hints.items():
+                validators[name] = TypeAdapter(annotation)
+
+        if use_cache:
+            Sync._field_validators_cache[target_cls] = validators
+        return validators
+
+    @staticmethod
+    def build_action_validators(
+        target_cls: type,
+        alias_function: AbcCallable[[str], str] | AliasGenerator | None,
+        use_cache: bool = True,
+    ) -> dict[str, TypeAdapter[Any]]:
+        cache_key = (target_cls, alias_function)
+        if use_cache and cache_key in Sync._action_validators_cache:
+            return Sync._action_validators_cache[cache_key]
+
+        validators: dict[str, TypeAdapter[Any]] = {}
+        for attr_name in dir(target_cls):
+            try:
+                attr = getattr(target_cls, attr_name)
+            except AttributeError:
+                continue
+            if isinstance(attr, property):
+                continue
+            if callable(attr) and hasattr(attr, "remote_action"):
+                key = attr.remote_action  # type: ignore[attr-defined]
+                model = Sync.build_kwargs_model(
+                    target_cls,
+                    f"{target_cls.__name__}Action_{key}",
+                    attr,
+                    alias_function,
+                )
+                validators[key] = TypeAdapter(model)
+
+        if use_cache:
+            Sync._action_validators_cache[cache_key] = validators
+        return validators
+
+    @staticmethod
+    def build_task_validators(
+        target_cls: type,
+        alias_function: AbcCallable[[str], str] | AliasGenerator | None,
+        use_cache: bool = True,
+    ) -> dict[str, TypeAdapter[Any]]:
+        cache_key = (target_cls, alias_function)
+        if use_cache and cache_key in Sync._task_validators_cache:
+            return Sync._task_validators_cache[cache_key]
+
+        validators: dict[str, TypeAdapter[Any]] = {}
+        for attr_name in dir(target_cls):
+            try:
+                attr = getattr(target_cls, attr_name)
+            except AttributeError:
+                continue
+            if isinstance(attr, property):
+                continue
+            if callable(attr) and hasattr(attr, "remote_task"):
+                key = attr.remote_task  # type: ignore[attr-defined]
+                model = Sync.build_kwargs_model(
+                    target_cls, f"{target_cls.__name__}Task_{key}", attr, alias_function
+                )
+                validators[key] = TypeAdapter(model)
+
+        if use_cache:
+            Sync._task_validators_cache[cache_key] = validators
+        return validators
