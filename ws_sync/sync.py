@@ -11,7 +11,6 @@ from typing import Any, Literal, get_type_hints
 import jsonpatch
 from pydantic import AliasGenerator, BaseModel, ConfigDict, TypeAdapter
 from pydantic.alias_generators import to_camel
-from pydantic_core import SchemaValidator
 
 from .session import session_context
 from .utils import toCamelCase as toCamelCaseFn
@@ -207,7 +206,7 @@ class Sync:
         assert self.session, "No session set, use the session.session_context variable!"
 
         # ========== Find action handlers ========== #
-        actions = actions or {}
+        actions = dict(actions or {})
 
         # find decorated actions
         for attr in dir(type(obj)):
@@ -227,7 +226,6 @@ class Sync:
         # ========== Create Action Type Adapters ========== #
         # Create TypeAdapters for action parameter validation
         self.action_type_adapters: dict[str, TypeAdapter[Any]] = {}
-        self.action_args_validators: dict[str, Any] = {}
 
         # Configure TypeAdapter with appropriate alias generator for camelCase conversion
         config = ConfigDict()
@@ -256,28 +254,19 @@ class Sync:
             action_adapter = TypeAdapter(handler, config=config)
             self.action_type_adapters[action_name] = action_adapter
 
-            # Extract the arguments schema to create a validator that returns (args, kwargs)
-            # instead of calling the function
-            args_schema = action_adapter.core_schema.get("arguments_schema")
-            if (
-                not args_schema
-                and action_adapter.core_schema.get("type") == "definitions"
-            ):
-                # Handle definitions schema structure
-                inner_schema = action_adapter.core_schema.get("schema", {})
-                args_schema = inner_schema.get("arguments_schema")
+            # Since the TypeAdapter also calls the function, it's already the handler itself
+            # Use closure to capture action_adapter by value, not reference
+            def make_action_wrapper(adapter):
+                return lambda **kwargs: adapter.validate_python(kwargs)
 
-            if args_schema:
-                self.action_args_validators[action_name] = SchemaValidator(
-                    args_schema  # type: ignore
-                )
+            actions[action_name] = make_action_wrapper(action_adapter)
 
         # Create action handler after TypeAdapters are ready
         self.actions = self._create_action_handler(actions)
 
         # ========== Find task handlers ========== #
-        tasks = tasks or {}
-        task_cancels = task_cancels or {}
+        tasks = dict(tasks or {})
+        task_cancels = dict(task_cancels or {})
 
         # find decorated tasks and cancel tasks
         for attr in dir(type(obj)):
@@ -300,7 +289,6 @@ class Sync:
         # ========== Create Task Type Adapters ========== #
         # Create TypeAdapters for task parameter validation
         self.task_type_adapters: dict[str, TypeAdapter[Any]] = {}
-        self.task_args_validators: dict[str, Any] = {}
         if tasks:
             # Configure TypeAdapter with appropriate alias generator for camelCase conversion
             config = ConfigDict()
@@ -329,20 +317,13 @@ class Sync:
                 task_adapter = TypeAdapter(handler, config=config)
                 self.task_type_adapters[task_name] = task_adapter
 
-                # Extract the arguments schema to create a validator that returns (args, kwargs)
-                args_schema = task_adapter.core_schema.get("arguments_schema")
-                if (
-                    not args_schema
-                    and task_adapter.core_schema.get("type") == "definitions"
-                ):
-                    # Handle definitions schema structure
-                    inner_schema = task_adapter.core_schema.get("schema", {})
-                    args_schema = inner_schema.get("arguments_schema")
+                # Since the TypeAdapter also calls the function, it's already the handler itself
+                # Use closure to capture task_adapter by value, not reference
+                def make_task_wrapper(adapter):
+                    return lambda **kwargs: adapter.validate_python(kwargs)
 
-                if args_schema:
-                    self.task_args_validators[task_name] = SchemaValidator(
-                        args_schema  # type: ignore
-                    )
+                tasks[task_name] = make_task_wrapper(task_adapter)
+
         self.tasks, self.task_cancels = self._create_task_handlers(tasks, task_cancels)
 
         # store running tasks
@@ -685,24 +666,7 @@ class Sync:
         async def _handle_action(action: dict):
             action_type = action.pop("type")
             if action_type in handlers:
-                # Validate and convert action parameters using arguments validator if available
-                if action_type in self.action_args_validators:
-                    try:
-                        # Use arguments validator to validate and convert the action parameters
-                        # This returns (args, kwargs) without calling the function
-                        args, kwargs = self.action_args_validators[
-                            action_type
-                        ].validate_python(action)
-                        await handlers[action_type](*args, **kwargs)
-                    except (ValueError, TypeError) as e:
-                        if self.logger:
-                            self.logger.error(
-                                f"Action {action_type} validation failed: {e}"
-                            )
-                        raise
-                else:
-                    # Fallback to original behavior if no validator available
-                    await handlers[action_type](**action)
+                await handlers[action_type](**action)
             else:
                 warnings.warn(f"No handler for action {action_type}")
 
@@ -734,25 +698,7 @@ class Sync:
             task_type = task_args.pop("type")
             if task_type in factories:
                 if task_type not in self.running_tasks:
-                    # Validate and convert task parameters using arguments validator if available
-                    if task_type in self.task_args_validators:
-                        try:
-                            # Use arguments validator to validate and convert the task parameters
-                            # This returns (args, kwargs) without calling the function
-                            args, kwargs = self.task_args_validators[
-                                task_type
-                            ].validate_python(task_args)
-                            todo = factories[task_type](*args, **kwargs)
-                        except (ValueError, TypeError) as e:
-                            if self.logger:
-                                self.logger.error(
-                                    f"Task {task_type} validation failed: {e}"
-                                )
-                            raise
-                    else:
-                        # Fallback to original behavior if no validator available
-                        todo = factories[task_type](**task_args)
-
+                    todo = factories[task_type](**task_args)
                     task = asyncio.create_task(_run_and_pop(todo, task_type))
                     self.running_tasks[task_type] = task
                     if self.task_exposure:
