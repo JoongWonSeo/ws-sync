@@ -2,7 +2,6 @@ import asyncio
 import base64
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from collections.abc import Callable as AbcCallable
 from copy import deepcopy
 from inspect import Parameter, signature
 from logging import Logger
@@ -21,7 +20,12 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel, to_pascal
 
-from ws_sync.decorators import find_remote_actions, find_remote_tasks
+from ws_sync.decorators import (
+    find_remote_actions,
+    find_remote_task_cancellers,
+    find_remote_tasks,
+)
+from ws_sync.utils import get_alias_function_for_class
 
 from .session import session_context
 
@@ -191,7 +195,7 @@ class Sync:
         self.key = key
         self.send_on_init = send_on_init
         self.casing_func = (
-            self.get_alias_function_for_class(type(self.obj))
+            get_alias_function_for_class(type(self.obj))
             if isinstance(self.obj, BaseModel)
             else (to_camel if toCamelCase else None)
         )
@@ -218,60 +222,31 @@ class Sync:
         self.session = session_context.get()
         assert self.session, "No session set, use the session.session_context variable!"
 
-        # ========== Find action handlers ========== #
-        actions = dict(actions or {})
-
-        # find decorated actions
-        actions.update(find_remote_actions(type(self.obj)))
-
         # ========== Create Action Validators (cached) ========== #
+        actions = dict(actions or {}) | find_remote_actions(type(self.obj))
         self.action_validators: dict[str, TypeAdapter[Any]] = (
             self.build_action_validators(
                 target_cls=type(self.obj),
+                actions=actions,
                 param_alias_generator=self.casing_func,
             )
         )
-        for action_name, handler in actions.items():
-            if action_name not in self.action_validators:
-                model = self.build_kwargs_model(
-                    type(self.obj),
-                    f"{type(self.obj).__name__}Action_{action_name}",
-                    handler,
-                    self.casing_func,
-                )
-                self.action_validators[action_name] = TypeAdapter(model)
-
         # Create action handler after validators are ready
-        self.actions = self._create_action_handler(actions)
-
-        # ========== Find task handlers ========== #
-        tasks = dict(tasks or {})
-        task_cancels = dict(task_cancels or {})
-
-        # find decorated tasks and cancel tasks
-        for attr in dir(type(obj)):
-            if isinstance(
-                getattr(type(obj), attr), property
-            ):  # ignore properties to prevent infinite recursion
-                continue
-            try:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=DeprecationWarning)
-                    task = getattr(obj, attr)
-                if callable(task):
-                    if hasattr(task, "remote_task"):
-                        tasks[task.remote_task] = task  # type: ignore[attr-defined]
-                    if hasattr(task, "remote_task_cancel"):
-                        task_cancels[task.remote_task_cancel] = task  # type: ignore[attr-defined]
-            except AttributeError:
-                pass
+        self.actions = self._create_action_handler(obj, actions)
 
         # ========== Create Task Validators (cached) ========== #
+        tasks = dict(tasks or {}) | find_remote_tasks(type(self.obj))
+        task_cancels = dict(task_cancels or {}) | find_remote_task_cancellers(
+            type(self.obj)
+        )
         self.task_validators: dict[str, TypeAdapter[Any]] = self.build_task_validators(
             target_cls=type(self.obj),
+            tasks=tasks,
             param_alias_generator=self.casing_func,
         )
-        self.tasks, self.task_cancels = self._create_task_handlers(tasks, task_cancels)
+        self.tasks, self.task_cancels = self._create_task_handlers(
+            obj, tasks, task_cancels
+        )
 
         # store running tasks
         self.running_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -454,6 +429,7 @@ class Sync:
         result = {}
 
         if isinstance(self.obj, BaseModel):
+            # TODO: maybe always explicitly serialize using TypeAdapters like below, since the model maybe be configured for other serialization use cases?
             result = self.obj.model_dump(
                 mode="json",
                 include=set(self.sync_attributes.keys()),
@@ -583,15 +559,15 @@ class Sync:
 
     def _create_action_handler(
         self,
+        obj: object,
         handlers: Mapping[str, Callable[..., Any]],
     ) -> Callable[[dict[str, Any]], Awaitable[None]]:
         async def _handle_action(action: dict):
             action_type = action.pop("type")
-            if action_type in handlers:
-                if action_type in self.action_validators:
-                    validated = self.action_validators[action_type].validate_python(
-                        action
-                    )
+            if handler := handlers.get(action_type):
+                # Validate action parameters, including converting to python
+                if validator := self.action_validators.get(action_type):
+                    validated = validator.validate_python(action)
                     if isinstance(validated, BaseModel):
                         # Extract native Python objects (BaseModel/dataclass/etc.)
                         kwargs = {
@@ -602,7 +578,12 @@ class Sync:
                         kwargs = validated  # already a dict-like structure
                 else:
                     kwargs = action
-                await handlers[action_type](**kwargs)
+
+                # Call the underlying action handler
+                if getattr(handler, "__self__", None) is None:
+                    await handler(obj, **kwargs)  # handler is unbound to an instance
+                else:
+                    await handler(**kwargs)  # handler is bound to an instance
             else:
                 warnings.warn(f"No handler for action {action_type}")
 
@@ -610,6 +591,7 @@ class Sync:
 
     def _create_task_handlers(
         self,
+        obj: object,
         factories: Mapping[str, Callable[..., Awaitable[Any]]],
         on_cancel: Mapping[str, Callable[..., Awaitable[Any]]] | None,
     ) -> tuple[
@@ -632,36 +614,42 @@ class Sync:
 
         async def _create_task(task_args: dict):
             task_type = task_args.pop("type")
-            if task_type in factories:
-                if task_type not in self.running_tasks:
-                    if task_type in self.task_validators:
-                        validated = self.task_validators[task_type].validate_python(
-                            task_args
-                        )
-                        if isinstance(validated, BaseModel):
-                            kwargs = {
-                                name: getattr(validated, name)
-                                for name in type(validated).model_fields
-                            }
-                        else:
-                            kwargs = validated
-                    else:
-                        kwargs = task_args
-                    todo = factories[task_type](**kwargs)
-                    task = asyncio.create_task(_run_and_pop(todo, task_type))
-                    self.running_tasks[task_type] = task
-                    if self.task_exposure:
-                        await self.sync()
-                else:
+            if factory := factories.get(task_type):
+                if task_type in self.running_tasks:
                     if self.logger:
                         self.logger.warning(f"Task {task_type} already running")
+                    return
+
+                if validator := self.task_validators.get(task_type):
+                    validated = validator.validate_python(task_args)
+                    if isinstance(validated, BaseModel):
+                        # Extract native Python objects (BaseModel/dataclass/etc.)
+                        kwargs = {
+                            name: getattr(validated, name)
+                            for name in type(validated).model_fields
+                        }
+                    else:
+                        kwargs = validated  # already a dict-like structure
+                else:
+                    kwargs = task_args
+
+                # Create the task
+                if getattr(factory, "__self__", None) is None:
+                    todo = factory(obj, **kwargs)  # factory is unbound to an instance
+                else:
+                    todo = factory(**kwargs)  # factory is bound to an instance
+
+                task = asyncio.create_task(_run_and_pop(todo, task_type))
+                self.running_tasks[task_type] = task
+                if self.task_exposure:
+                    await self.sync()
             else:
                 warnings.warn(f"No factory for task {task_type}")
 
         async def _cancel_task(task_args: dict):
             task_type = task_args.pop("type")
-            if task_type in self.running_tasks:
-                self.running_tasks[task_type].cancel()
+            if running_task := self.running_tasks.get(task_type):
+                running_task.cancel()
             else:
                 if self.logger:
                     self.logger.warning(f"Task {task_type} not running")
@@ -674,33 +662,22 @@ class Sync:
 
     # ========== Static validator builders with caching ========== #
     _field_validators_cache: dict[type, dict[str, TypeAdapter[Any]]] = {}
-    _action_validators_cache: dict[
-        tuple[type, object | None], dict[str, TypeAdapter[Any]]
-    ] = {}
-    _task_validators_cache: dict[
-        tuple[type, object | None], dict[str, TypeAdapter[Any]]
-    ] = {}
-
-    @staticmethod
-    def get_alias_function_for_class(
-        target_cls: type,
-    ) -> AbcCallable[[str], str] | None:
-        if issubclass(target_cls, BaseModel):
-            alias_gen = getattr(target_cls, "model_config", {}).get("alias_generator")
-            if isinstance(alias_gen, AliasGenerator):
-                fn = alias_gen.serialization_alias or alias_gen.alias
-                return cast(AbcCallable[[str], str] | None, fn)
-            if callable(alias_gen):
-                return cast(AbcCallable[[str], str], alias_gen)
-        return None
+    """{class: {field: TypeAdapter}}; Dynamically registered fields may be added at runtime"""
+    _action_validators_cache: dict[type, dict[str, TypeAdapter[Any]]] = {}
+    """{class: {action_key: TypeAdapter}}; Dynamically registered actions may be added at runtime"""
+    _task_validators_cache: dict[type, dict[str, TypeAdapter[Any]]] = {}
+    """{class: {task_key: TypeAdapter}}; Dynamically registered tasks may be added at runtime"""
 
     @staticmethod
     def build_kwargs_model(
         target_cls: type,
         model_name: str,
         func: Callable[..., Any],
-        alias_generator: AbcCallable[[str], str] | AliasGenerator | None,
+        alias_generator: Callable[[str], str] | AliasGenerator | None,
     ) -> type[BaseModel]:
+        """
+        Build a Pydantic model to validate the kwargs of a function.
+        """
         sig = signature(func)
         fields: dict[str, tuple[Any, Any]] = {}
         for idx, (param_name, param) in enumerate(sig.parameters.items()):
@@ -782,8 +759,9 @@ class Sync:
     @staticmethod
     def build_action_validators(
         target_cls: type,
+        actions: dict[str, Callable[..., Any]] | None = None,
         schema_title_generator: SchemaTitleGenerator = default_action_title_generator,
-        param_alias_generator: AbcCallable[[str], str] | AliasGenerator | None = None,
+        param_alias_generator: Callable[[str], str] | AliasGenerator | None = None,
         use_cache: bool = True,
     ) -> dict[str, TypeAdapter[Any]]:
         """
@@ -796,15 +774,19 @@ class Sync:
             use_cache: Whether to use the cache for the validator objects.
         """
         if param_alias_generator is None:
-            param_alias_generator = Sync.get_alias_function_for_class(target_cls)
-
-        cache_key = (target_cls, param_alias_generator)
-        if use_cache and cache_key in Sync._action_validators_cache:
-            return Sync._action_validators_cache[cache_key]
+            param_alias_generator = get_alias_function_for_class(target_cls)
 
         validators: dict[str, TypeAdapter[Any]] = {}
-        actions = find_remote_actions(target_cls)
+
+        cache_key = target_cls
+        if use_cache and cache_key in Sync._action_validators_cache:
+            validators = Sync._action_validators_cache[cache_key]
+
+        actions = actions or find_remote_actions(target_cls)
         for key, func in actions.items():
+            if key in validators:
+                continue
+
             model = Sync.build_kwargs_model(
                 target_cls=target_cls,
                 model_name=schema_title_generator(
@@ -822,8 +804,9 @@ class Sync:
     @staticmethod
     def build_task_validators(
         target_cls: type,
+        tasks: dict[str, Callable[..., Any]] | None = None,
         schema_title_generator: SchemaTitleGenerator = default_task_title_generator,
-        param_alias_generator: AbcCallable[[str], str] | AliasGenerator | None = None,
+        param_alias_generator: Callable[[str], str] | AliasGenerator | None = None,
         use_cache: bool = True,
     ) -> dict[str, TypeAdapter[Any]]:
         """
@@ -836,15 +819,19 @@ class Sync:
             use_cache: Whether to use the cache for the validator objects.
         """
         if param_alias_generator is None:
-            param_alias_generator = Sync.get_alias_function_for_class(target_cls)
-
-        cache_key = (target_cls, param_alias_generator)
-        if use_cache and cache_key in Sync._task_validators_cache:
-            return Sync._task_validators_cache[cache_key]
+            param_alias_generator = get_alias_function_for_class(target_cls)
 
         validators: dict[str, TypeAdapter[Any]] = {}
-        tasks = find_remote_tasks(target_cls)
+
+        cache_key = target_cls
+        if use_cache and cache_key in Sync._task_validators_cache:
+            validators = Sync._task_validators_cache[cache_key]
+
+        tasks = tasks or find_remote_tasks(target_cls)
         for key, func in tasks.items():
+            if key in validators:
+                continue
+
             model = Sync.build_kwargs_model(
                 target_cls=target_cls,
                 model_name=schema_title_generator(

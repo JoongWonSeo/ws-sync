@@ -1,5 +1,3 @@
-from typing import ClassVar
-
 from pydantic import AliasGenerator, BaseModel, ConfigDict, PrivateAttr, TypeAdapter
 from pydantic.alias_generators import to_camel
 from pydantic.json_schema import GenerateJsonSchema
@@ -10,6 +8,8 @@ from .sync import Sync
 class Synced:
     """
     A mixin class that provides a `sync` attribute in a way that is compatible with any pydantic BaseModel subclass.
+
+    Making a class inherit from Synced means its fields are meant to be synced! Do not overload its usage for other serialization use cases unless it's guaranteed to be a 100% overlap with the synced use case.
 
     Example with BaseModel:
     ```python
@@ -44,15 +44,6 @@ class Synced:
         # make fields with default values required in the JSON schema when mode="serialization"
         json_schema_serialization_defaults_required=True,
     )
-
-    field_validators: ClassVar[dict[str, TypeAdapter]] = {}
-    """Maps the field names to the TypeAdapter validator for the field."""
-
-    action_validators: ClassVar[dict[str, TypeAdapter]] = {}
-    """Maps the remote_action keys to the TypeAdapter validator for the action handler."""
-
-    task_validators: ClassVar[dict[str, TypeAdapter]] = {}
-    """Maps the remote_task keys to the TypeAdapter validator for the task handler."""
 
     _sync: Sync = PrivateAttr()
 
