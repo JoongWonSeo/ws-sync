@@ -86,11 +86,10 @@ class Calendar:
 ```
 """
 
+from collections.abc import Callable
 from functools import wraps
 from logging import Logger
 from types import EllipsisType
-
-from .sync import Sync
 
 
 def sync(
@@ -116,6 +115,7 @@ def sync(
         expose_running_tasks: expose the list in the synced state as `running_tasks` or `runningTasks`
         logger: logger to use for logging
     """
+    from .sync import Sync
 
     def decorator(init_func):
         def wrapper(self, *args, **kwargs):
@@ -223,6 +223,24 @@ def remote_action(key: str):
     return decorator
 
 
+def find_remote_actions(cls: type) -> dict[str, Callable]:
+    """
+    Find all remote actions in a class.
+    Returns a dictionary of action keys to the function.
+    """
+    actions: dict[str, Callable] = {}
+    for attr_name in dir(cls):
+        try:
+            attr = getattr(cls, attr_name)
+        except AttributeError:
+            continue
+        if isinstance(attr, property):
+            continue
+        if callable(attr) and hasattr(attr, "remote_action"):
+            actions[attr.remote_action] = attr  # type: ignore[reportFunctionMemberAccess]
+    return actions
+
+
 def remote_task(key: str):
     """
     Decorator for methods: Expose the method as a long-running task to the frontend.
@@ -244,6 +262,24 @@ def remote_task(key: str):
 
     decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
     return decorator
+
+
+def find_remote_tasks(cls: type) -> dict[str, Callable]:
+    """
+    Find all remote tasks in a class.
+    Returns a dictionary of task keys to the function.
+    """
+    tasks: dict[str, Callable] = {}
+    for attr_name in dir(cls):
+        try:
+            attr = getattr(cls, attr_name)
+        except AttributeError:
+            continue
+        if isinstance(attr, property):
+            continue
+        if callable(attr) and hasattr(attr, "remote_task"):
+            tasks[attr.remote_task] = attr  # type: ignore[reportFunctionMemberAccess]
+    return tasks
 
 
 def remote_task_cancel(key: str):
@@ -273,3 +309,21 @@ def remote_task_cancel(key: str):
 
     decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
     return decorator
+
+
+def find_remote_task_cancellers(cls: type) -> dict[str, Callable]:
+    """
+    Find all remote task-cancellers in a class.
+    Returns a dictionary of task-canceller keys to the function.
+    """
+    cancellers: dict[str, Callable] = {}
+    for attr_name in dir(cls):
+        try:
+            attr = getattr(cls, attr_name)
+        except AttributeError:
+            continue
+        if isinstance(attr, property):
+            continue
+        if callable(attr) and hasattr(attr, "remote_task_cancel"):
+            cancellers[attr.remote_task_cancel] = attr  # type: ignore[reportFunctionMemberAccess]
+    return cancellers

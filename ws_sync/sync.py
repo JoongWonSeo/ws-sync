@@ -4,14 +4,24 @@ import warnings
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from collections.abc import Callable as AbcCallable
 from copy import deepcopy
+from inspect import Parameter, signature
 from logging import Logger
 from time import time
 from types import EllipsisType
-from typing import Any, Literal, cast, get_type_hints
+from typing import Any, Literal, Protocol, cast, get_type_hints
 
 import jsonpatch
-from pydantic import AliasGenerator, BaseModel, ConfigDict, TypeAdapter, create_model
-from pydantic.alias_generators import to_camel
+from pydantic import (
+    AliasGenerator,
+    BaseModel,
+    ConfigDict,
+    PydanticSchemaGenerationError,
+    TypeAdapter,
+    create_model,
+)
+from pydantic.alias_generators import to_camel, to_pascal
+
+from ws_sync.decorators import find_remote_actions, find_remote_tasks
 
 from .session import session_context
 
@@ -61,6 +71,18 @@ def download_event():
 # TODO: for key-space, global key prefix and context manager function in Sync
 
 ToastType = Literal["default", "message", "info", "success", "warning", "error"]
+
+
+class SchemaTitleGenerator(Protocol):
+    def __call__(self, class_name: str, key: str) -> str: ...
+
+
+default_action_title_generator: SchemaTitleGenerator = (  # noqa: E731
+    lambda class_name, key: f"{class_name}Action{to_pascal(key)}"
+)
+default_task_title_generator: SchemaTitleGenerator = (  # noqa: E731
+    lambda class_name, key: f"{class_name}Task{to_pascal(key)}"
+)
 
 
 class Sync:
@@ -200,23 +222,14 @@ class Sync:
         actions = dict(actions or {})
 
         # find decorated actions
-        for attr in dir(type(obj)):
-            if isinstance(
-                getattr(type(obj), attr), property
-            ):  # ignore properties to prevent infinite recursion
-                continue
-            try:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=DeprecationWarning)
-                    action = getattr(obj, attr)
-                if callable(action) and hasattr(action, "remote_action"):
-                    actions[action.remote_action] = action  # type: ignore[attr-defined]
-            except AttributeError:
-                pass
+        actions.update(find_remote_actions(type(self.obj)))
 
         # ========== Create Action Validators (cached) ========== #
         self.action_validators: dict[str, TypeAdapter[Any]] = (
-            self.build_action_validators(type(self.obj), self.casing_func)
+            self.build_action_validators(
+                target_cls=type(self.obj),
+                param_alias_generator=self.casing_func,
+            )
         )
         for action_name, handler in actions.items():
             if action_name not in self.action_validators:
@@ -255,18 +268,9 @@ class Sync:
 
         # ========== Create Task Validators (cached) ========== #
         self.task_validators: dict[str, TypeAdapter[Any]] = self.build_task_validators(
-            type(self.obj), self.casing_func
+            target_cls=type(self.obj),
+            param_alias_generator=self.casing_func,
         )
-        for task_name, handler in tasks.items():
-            if task_name not in self.task_validators:
-                model = self.build_kwargs_model(
-                    type(self.obj),
-                    f"{type(self.obj).__name__}Task_{task_name}",
-                    handler,
-                    self.casing_func,
-                )
-                self.task_validators[task_name] = TypeAdapter(model)
-
         self.tasks, self.task_cancels = self._create_task_handlers(tasks, task_cancels)
 
         # store running tasks
@@ -695,10 +699,8 @@ class Sync:
         target_cls: type,
         model_name: str,
         func: Callable[..., Any],
-        alias_function: AbcCallable[[str], str] | AliasGenerator | None,
+        alias_generator: AbcCallable[[str], str] | AliasGenerator | None,
     ) -> type[BaseModel]:
-        from inspect import Parameter, signature
-
         sig = signature(func)
         fields: dict[str, tuple[Any, Any]] = {}
         for idx, (param_name, param) in enumerate(sig.parameters.items()):
@@ -712,10 +714,14 @@ class Sync:
             default = param.default if param.default is not Parameter.empty else ...
             fields[param_name] = (annotation, default)
 
-        cfg = ConfigDict(alias_generator=alias_function, populate_by_name=True)  # type: ignore[arg-type]
-        model = create_model(  # type: ignore[call-overload]
+        cfg = ConfigDict(
+            alias_generator=alias_generator,
+            validate_by_name=True,  # Python -> Python (TODO: when?)
+            validate_by_alias=True,  # JSON -> Python
+        )
+        model = create_model(
             model_name,
-            __config__=cfg,  # type: ignore[arg-type]
+            __config__=cfg,
             __module__=target_cls.__module__,
             **cast(dict[str, Any], fields),
         )
@@ -741,9 +747,16 @@ class Sync:
         validators: dict[str, TypeAdapter[Any]] = {}
         if issubclass(target_cls, BaseModel):
             for name, field in target_cls.model_fields.items():
+                print(f"Building validator for field {name}: {field.annotation}")
                 validators[name] = TypeAdapter(field.annotation)
             for name, field in target_cls.model_computed_fields.items():
+                print(
+                    f"Building validator for computed field {name}: {field.return_type}"
+                )
                 validators[name] = TypeAdapter(field.return_type)
+            print(
+                f"Built {len(validators)} field validators for {target_cls.__name__} using model fields"
+            )
         else:
             type_hints = get_type_hints(target_cls)
             if field_whitelist is not None:
@@ -753,7 +766,14 @@ class Sync:
                     if (annotation := type_hints.get(field))
                 }
             for name, annotation in type_hints.items():
-                validators[name] = TypeAdapter(annotation)
+                print(f"Building validator for {name}: {annotation}")
+                try:
+                    validators[name] = TypeAdapter(annotation)
+                except PydanticSchemaGenerationError as e:
+                    print(f"Error building validator for {name}: {e}")
+            print(
+                f"Built {len(validators)} field validators for {target_cls.__name__} using type hints"
+            )
 
         if use_cache:
             Sync._field_validators_cache[target_cls] = validators
@@ -762,30 +782,38 @@ class Sync:
     @staticmethod
     def build_action_validators(
         target_cls: type,
-        alias_function: AbcCallable[[str], str] | AliasGenerator | None,
+        schema_title_generator: SchemaTitleGenerator = default_action_title_generator,
+        param_alias_generator: AbcCallable[[str], str] | AliasGenerator | None = None,
         use_cache: bool = True,
     ) -> dict[str, TypeAdapter[Any]]:
-        cache_key = (target_cls, alias_function)
+        """
+        Build a dictionary of action validators for a given class.
+
+        Args:
+            target_cls: The class whose actions to build validators for.
+            schema_title_generator: A function to set the JSON schema title for each action.
+            param_alias_generator: A function to set the JSON schema alias for the action *parameter names*.
+            use_cache: Whether to use the cache for the validator objects.
+        """
+        if param_alias_generator is None:
+            param_alias_generator = Sync.get_alias_function_for_class(target_cls)
+
+        cache_key = (target_cls, param_alias_generator)
         if use_cache and cache_key in Sync._action_validators_cache:
             return Sync._action_validators_cache[cache_key]
 
         validators: dict[str, TypeAdapter[Any]] = {}
-        for attr_name in dir(target_cls):
-            try:
-                attr = getattr(target_cls, attr_name)
-            except AttributeError:
-                continue
-            if isinstance(attr, property):
-                continue
-            if callable(attr) and hasattr(attr, "remote_action"):
-                key = attr.remote_action  # type: ignore[attr-defined]
-                model = Sync.build_kwargs_model(
-                    target_cls,
-                    f"{target_cls.__name__}Action_{key}",
-                    attr,
-                    alias_function,
-                )
-                validators[key] = TypeAdapter(model)
+        actions = find_remote_actions(target_cls)
+        for key, func in actions.items():
+            model = Sync.build_kwargs_model(
+                target_cls=target_cls,
+                model_name=schema_title_generator(
+                    class_name=target_cls.__name__, key=key
+                ),
+                func=func,
+                alias_generator=param_alias_generator,
+            )
+            validators[key] = TypeAdapter(model)
 
         if use_cache:
             Sync._action_validators_cache[cache_key] = validators
@@ -794,27 +822,38 @@ class Sync:
     @staticmethod
     def build_task_validators(
         target_cls: type,
-        alias_function: AbcCallable[[str], str] | AliasGenerator | None,
+        schema_title_generator: SchemaTitleGenerator = default_task_title_generator,
+        param_alias_generator: AbcCallable[[str], str] | AliasGenerator | None = None,
         use_cache: bool = True,
     ) -> dict[str, TypeAdapter[Any]]:
-        cache_key = (target_cls, alias_function)
+        """
+        Build a dictionary of task validators for a given class.
+
+        Args:
+            target_cls: The class whose tasks to build validators for.
+            schema_title_generator: A function to set the JSON schema title for each task.
+            param_alias_generator: A function to set the JSON schema alias for the task *parameter names*.
+            use_cache: Whether to use the cache for the validator objects.
+        """
+        if param_alias_generator is None:
+            param_alias_generator = Sync.get_alias_function_for_class(target_cls)
+
+        cache_key = (target_cls, param_alias_generator)
         if use_cache and cache_key in Sync._task_validators_cache:
             return Sync._task_validators_cache[cache_key]
 
         validators: dict[str, TypeAdapter[Any]] = {}
-        for attr_name in dir(target_cls):
-            try:
-                attr = getattr(target_cls, attr_name)
-            except AttributeError:
-                continue
-            if isinstance(attr, property):
-                continue
-            if callable(attr) and hasattr(attr, "remote_task"):
-                key = attr.remote_task  # type: ignore[attr-defined]
-                model = Sync.build_kwargs_model(
-                    target_cls, f"{target_cls.__name__}Task_{key}", attr, alias_function
-                )
-                validators[key] = TypeAdapter(model)
+        tasks = find_remote_tasks(target_cls)
+        for key, func in tasks.items():
+            model = Sync.build_kwargs_model(
+                target_cls=target_cls,
+                model_name=schema_title_generator(
+                    class_name=target_cls.__name__, key=key
+                ),
+                func=func,
+                alias_generator=param_alias_generator,
+            )
+            validators[key] = TypeAdapter(model)
 
         if use_cache:
             Sync._task_validators_cache[cache_key] = validators

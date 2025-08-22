@@ -1,7 +1,8 @@
 from typing import ClassVar
 
-from pydantic import AliasGenerator, ConfigDict, PrivateAttr, TypeAdapter
+from pydantic import AliasGenerator, BaseModel, ConfigDict, PrivateAttr, TypeAdapter
 from pydantic.alias_generators import to_camel
+from pydantic.json_schema import GenerateJsonSchema
 
 from .sync import Sync
 
@@ -64,15 +65,63 @@ class Synced:
         self._sync = value
 
     # ===== Class-level validator creation ===== #
-    def __init_subclass__(cls, **kwargs):
+    def __init_subclass__(cls, *, is_abstract: bool = False, **kwargs):
+        """
+        Initialize the subclass with the sync_key.
+
+        Args:
+            sync_key: The key to use for the sync object.
+        """
         super().__init_subclass__(**kwargs)
-        # TODO: call the static builders for field_validators, action_validators, and task_validators
+        if not is_abstract:
+            assert issubclass(cls, BaseModel), (
+                f"{cls.__name__} must inherit from BaseModel"
+            )
+
+    @classmethod
+    def generate_validators(cls):
+        cls.field_validators = Sync.build_field_validators(cls)
+        cls.action_validators = Sync.build_action_validators(cls)
+        cls.task_validators = Sync.build_task_validators(cls)
+
+    @classmethod
+    def ws_sync_json_schema(
+        cls,
+        schema_generator: type[GenerateJsonSchema] = GenerateJsonSchema,
+        ref_template: str = "#/$defs/{model}",
+    ):
+        """
+        Returns a JSON schema suitable for ws_sync, meaning the model (all of its fields) as serialization, its action and task inputs as validation.
+        """
+        assert issubclass(cls, BaseModel), f"{cls.__name__} must inherit from BaseModel"
+        cls.generate_validators()
+        validation = list(cls.action_validators.items()) + list(
+            cls.task_validators.items()
+        )
+        serialization = [("MODEL", TypeAdapter(cls))]
+        schema_inputs: list = [
+            (sync_key, "validation", validator) for sync_key, validator in validation
+        ] + [
+            (sync_key, "serialization", serializer)
+            for sync_key, serializer in serialization
+        ]
+        schemas = TypeAdapter.json_schemas(
+            schema_inputs, schema_generator=schema_generator, ref_template=ref_template
+        )
+
+        # # merge with model schema
+        # model_schema = cls.model_json_schema()
+        # model_schema["definitions"] = schemas
+        return schemas
 
 
-class SyncedAsCamelCase(Synced):
+class SyncedAsCamelCase(Synced, is_abstract=True):
     """Synced base that serializes fields using camelCase."""
 
     model_config = Synced.model_config | ConfigDict(
         alias_generator=AliasGenerator(serialization_alias=to_camel),
         serialize_by_alias=True,
     )
+
+    def __init_subclass__(cls, *, is_abstract: bool = False, **kwargs):
+        super().__init_subclass__(is_abstract=is_abstract, **kwargs)
