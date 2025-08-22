@@ -106,3 +106,59 @@ class TestRemoteTaskValidation:
         await task
 
         assert runner.received_priority == TaskPriority.MEDIUM
+
+    @pytest.mark.asyncio
+    async def test_remote_task_optional_key_with_parentheses(self, mock_session: Mock):
+        """Test remote task with optional key using () - should default to method name"""
+
+        class OptionalKeyTaskRunner:
+            sync: Sync
+
+            @sync_all("OPTIONAL_KEY_TASK_RUNNER")
+            def __init__(self):
+                self.result: str | None = None
+
+            @remote_task()
+            async def my_task(self, value: str):
+                self.result = value
+
+        runner = OptionalKeyTaskRunner()
+
+        # Test that task key defaults to method name "my_task"
+        task_data = {"type": "my_task", "value": "test_value"}
+        await runner.sync.tasks(task_data)
+
+        # Wait for task completion
+        task = runner.sync.running_tasks["my_task"]
+        await task
+
+        assert runner.result == "test_value"
+
+    @pytest.mark.asyncio
+    async def test_remote_task_optional_key_without_parentheses(
+        self, mock_session: Mock
+    ):
+        """Test remote task with optional key without () - should default to method name"""
+
+        class OptionalKeyTaskRunnerNoParens:
+            sync: Sync
+
+            @sync_all("OPTIONAL_KEY_TASK_RUNNER_NO_PARENS")
+            def __init__(self):
+                self.result: str | None = None
+
+            @remote_task
+            async def another_task(self, value: str):
+                self.result = value
+
+        runner = OptionalKeyTaskRunnerNoParens()
+
+        # Test that task key defaults to method name "another_task"
+        task_data = {"type": "another_task", "value": "test_value"}
+        await runner.sync.tasks(task_data)
+
+        # Wait for task completion
+        task = runner.sync.running_tasks["another_task"]
+        await task
+
+        assert runner.result == "test_value"

@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError, computed_field
 
+from ws_sync.decorators import sync_all
 from ws_sync.sync import Sync
 from ws_sync.synced_model import Synced, SyncedAsCamelCase
 
@@ -14,8 +15,10 @@ class Person(SyncedAsCamelCase, BaseModel):
     first_name: str
     last_name: str
 
+    @sync_all("PERSON")
     def model_post_init(self, context):
-        self.sync = Sync.all(self, key="PERSON")
+        ...
+        # self.sync = Sync.all(self, key="PERSON")
 
 
 class Animal(Synced, BaseModel):

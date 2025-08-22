@@ -500,3 +500,51 @@ class TestRemoteActionValidation:
         assert len(manager.batch_result["urgent"]) == 2
         assert all(isinstance(task, Task) for task in manager.batch_result["urgent"])
         assert manager.batch_result["urgent"][0].priority == Priority.HIGH
+
+    @pytest.mark.asyncio
+    async def test_remote_action_optional_key_with_parentheses(
+        self, mock_session: Mock
+    ):
+        """Test remote action with optional key using () - should default to method name"""
+
+        class OptionalKeyManager:
+            sync: Sync
+
+            @sync_all("OPTIONAL_KEY_MANAGER")
+            def __init__(self):
+                self.result: str | None = None
+
+            @remote_action()
+            async def my_action(self, value: str):
+                self.result = value
+
+        manager = OptionalKeyManager()
+
+        # Test that action key defaults to method name "my_action"
+        action_data = {"type": "my_action", "value": "test_value"}
+        await manager.sync.actions(action_data)
+        assert manager.result == "test_value"
+
+    @pytest.mark.asyncio
+    async def test_remote_action_optional_key_without_parentheses(
+        self, mock_session: Mock
+    ):
+        """Test remote action with optional key without () - should default to method name"""
+
+        class OptionalKeyManagerNoParens:
+            sync: Sync
+
+            @sync_all("OPTIONAL_KEY_MANAGER_NO_PARENS")
+            def __init__(self):
+                self.result: str | None = None
+
+            @remote_action
+            async def another_action(self, value: str):
+                self.result = value
+
+        manager = OptionalKeyManagerNoParens()
+
+        # Test that action key defaults to method name "another_action"
+        action_data = {"type": "another_action", "value": "test_value"}
+        await manager.sync.actions(action_data)
+        assert manager.result == "test_value"
