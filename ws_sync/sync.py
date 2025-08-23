@@ -25,7 +25,7 @@ from ws_sync.decorators import (
     find_remote_task_cancellers,
     find_remote_tasks,
 )
-from ws_sync.utils import get_alias_function_for_class
+from ws_sync.utils import get_alias_function_for_class, nonblock_call
 
 from .session import session_context
 
@@ -581,9 +581,13 @@ class Sync:
 
                 # Call the underlying action handler
                 if getattr(handler, "__self__", None) is None:
-                    await handler(obj, **kwargs)  # handler is unbound to an instance
+                    await nonblock_call(
+                        handler, obj, **kwargs
+                    )  # handler is unbound to an instance
                 else:
-                    await handler(**kwargs)  # handler is bound to an instance
+                    await nonblock_call(
+                        handler, **kwargs
+                    )  # handler is bound to an instance
             else:
                 warnings.warn(f"No handler for action {action_type}")
 
@@ -635,9 +639,13 @@ class Sync:
 
                 # Create the task
                 if getattr(factory, "__self__", None) is None:
-                    todo = factory(obj, **kwargs)  # factory is unbound to an instance
+                    todo = nonblock_call(
+                        factory, obj, **kwargs
+                    )  # factory is unbound to an instance
                 else:
-                    todo = factory(**kwargs)  # factory is bound to an instance
+                    todo = nonblock_call(
+                        factory, **kwargs
+                    )  # factory is bound to an instance
 
                 task = asyncio.create_task(_run_and_pop(todo, task_type))
                 self.running_tasks[task_type] = task

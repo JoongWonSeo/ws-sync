@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import cast
 
 from pydantic import AliasGenerator, BaseModel
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ async def nonblock_call(func: Callable, *args, **kwargs):
         return await func(*args, **kwargs)
     else:
         logger.warning("function is not async.")
-        return await asyncio.to_thread(func, *args, **kwargs)
+        return await run_in_threadpool(func, *args, **kwargs)
 
 
 def get_alias_function_for_class(
