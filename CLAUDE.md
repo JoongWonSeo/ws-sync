@@ -9,30 +9,27 @@ ws-sync is a Python library that implements a WebSocket-based synchronization pr
 ## Development Commands
 
 ### Build and Installation
+
 ```bash
 # Install dependencies
-poetry install
+uv sync
 
 # Build the package
-poetry build
-
-# Install in development mode
-poetry install --editable
+uv build
 ```
 
 ### Testing
+
 ```bash
 # Run all tests
-poetry run pytest
+uv run pytest
 
 # Run specific test file
-poetry run pytest test_pydantic_sync.py
-
-# Run tests with verbose output
-poetry run pytest -v
+uv run pytest test_pydantic_sync.py
 ```
 
 ### Code Quality and Formatting
+
 ```bash
 # Run pre-commit hooks (linting, formatting, type checking)
 pre-commit run --all-files
@@ -45,15 +42,17 @@ pre-commit install
 ```
 
 ### Development Workflow
+
 - Uses pytest for testing with pytest-asyncio for async test support
-- Pydantic is included as a dev dependency for testing  
-- The project uses Poetry for dependency management
+- Pydantic is included as a dev dependency for testing
+- The project uses uv for dependency management
 - Pre-commit hooks are configured with:
   - **Ruff**: For linting and code formatting (replaces black + flake8)
   - **Pyright**: For static type checking
 - **IMPORTANT**: Always run `pre-commit run --all-files` before committing to ensure code quality
 
 ### Typing Conventions
+
 - Add type annotations where they provide clarity and aren't obvious to static analysis
 - **Function returns**: Only annotate return types for functions with explicit `return` statements
 - **No `-> None`**: Don't add `-> None` for functions without returns or with only bare `return`
@@ -66,18 +65,21 @@ pre-commit install
 ### Key Components
 
 **Session Management** (`session.py`):
+
 - `Session`: Core class managing WebSocket connections and event handling
 - `SessionState`: ABC for user-defined session state objects
 - `session_context`: ContextVar for per-task session access
 - Handles connection lifecycle, event dispatching, and graceful reconnection
 
 **Synchronization** (`sync.py`):
+
 - `Sync`: Main synchronization class that manages object state and frontend communication
 - Uses JSON Patch for efficient state updates
 - Supports automatic attribute detection or manual specification
 - Handles actions, tasks, and binary data transfer
 
 **Decorators** (`decorators.py`):
+
 - `@sync_all()`: Sync all non-private attributes
 - `@sync_only()`: Sync only specified attributes
 - `@remote_action()`: Expose methods as frontend-callable actions
@@ -85,15 +87,18 @@ pre-commit install
 - `@remote_task_cancel()`: Handle task cancellation
 
 **Utilities** (`utils.py`):
+
 - `nonblock_call()`: Async wrapper for sync/async functions
 - `toCamelCase()`: Convert snake_case to camelCase
 
 **User Identification** (`id.py`):
+
 - `get_user_session()`: Protocol for identifying users across reconnections
 
 ### Protocol Design
 
 The library implements a simple event-based protocol:
+
 - All events follow `{"type": "event_type", "data": any}` format
 - State synchronization uses JSON Patch for efficient updates
 - Binary data supported through separate metadata/data messages
@@ -108,7 +113,7 @@ The library implements a simple event-based protocol:
 5. **Type-Safe Integration**: Full support for typed Python objects using Pydantic's TypeAdapter
    - **Class-level annotations required**: Use `class MyClass:` followed by `attr: Type` annotations
    - Pydantic BaseModel support with validation
-   - TypedDict support for structured dictionaries  
+   - TypedDict support for structured dictionaries
    - `List[Type]` and `Dict[str, Type]` support for any type
    - Automatic serialization/deserialization with type validation and coercion
    - Proper handling of nested structures and JSON Patch updates
@@ -117,18 +122,20 @@ The library implements a simple event-based protocol:
 ## Usage Patterns
 
 ### Basic Synchronization
+
 ```python
 class MyObject:
     @sync_all("MY_KEY")
     def __init__(self):
         self.value = "initial"
-    
+
     async def update_value(self, new_value):
         self.value = new_value
         await self.sync()
 ```
 
 ### Type-Safe Model Syncing
+
 ```python
 from pydantic import BaseModel
 from typing import List, Dict
@@ -148,17 +155,17 @@ class UserManager:
     users: List[User]  # Class-level type annotation required
     user_index: Dict[str, User]
     stats: UserStats
-    
+
     @sync_all("USER_MANAGER")
     def __init__(self):
         self.users: List[User] = []
         self.user_index: Dict[str, User] = {}
         self.stats: UserStats = {
             "total_users": 0,
-            "active_users": 0, 
+            "active_users": 0,
             "last_login": ""
         }
-    
+
     async def add_user(self, user_data: dict):
         user = User(**user_data)  # Pydantic validation
         self.users.append(user)
@@ -167,6 +174,7 @@ class UserManager:
 ```
 
 ### Actions and Tasks
+
 ```python
 @remote_action("DO_SOMETHING")
 async def do_something(self, param):
@@ -180,7 +188,9 @@ async def long_operation(self):
 ```
 
 ### Server Integration
+
 Typically used with FastAPI or similar async web frameworks:
+
 ```python
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
@@ -198,6 +208,7 @@ async def websocket_endpoint(ws: WebSocket):
 ## Implementation Details
 
 The library uses Pydantic's `TypeAdapter` for all type validation and conversion, which provides:
+
 - Automatic type coercion (e.g., string "123" → int 123)
 - Validation of complex nested structures
 - Support for any Python type annotation including TypedDict, dataclasses, and custom types
@@ -209,7 +220,7 @@ The library uses Pydantic's `TypeAdapter` for all type validation and conversion
 class MyClass:
     # ✅ Correct - class-level annotation
     my_attr: MyType
-    
+
     @sync_all("KEY")
     def __init__(self):
         # ❌ This annotation is ignored
@@ -219,6 +230,7 @@ class MyClass:
 ### Performance Optimizations
 
 TypeAdapters are created once during object initialization and cached for the lifetime of the sync object. This means:
+
 - **No runtime TypeAdapter creation** - validation is extremely fast
 - **Zero reflection overhead** during state operations
 - **Optimal memory usage** - adapters are reused across all sync operations
