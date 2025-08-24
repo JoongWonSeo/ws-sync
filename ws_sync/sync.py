@@ -12,6 +12,7 @@ import jsonpatch
 from pydantic import AliasGenerator, BaseModel, TypeAdapter
 
 from .session import session_context
+from .utils import nonblock_call
 from .utils import toCamelCase as toCamelCaseFn
 
 
@@ -140,6 +141,7 @@ class Sync:
         actions: dict[str, Callable[..., Any]] | None = None,
         tasks: dict[str, Callable[..., Awaitable[Any]]] | None = None,
         task_cancels: dict[str, Callable[..., Awaitable[Any]]] | None = None,
+        on_snapshot: Callable[[dict[str, Any]], Awaitable[Any] | Any] | None = None,
     ):
         """
         Register the attributes that should be synced with the frontend.
@@ -161,6 +163,7 @@ class Sync:
             actions: action handlers for each action type, each taking the data of the action as keyword arguments
             tasks: either a dict of task factories for each task type, each returning a coroutine to be used as a task, or a tuple of (task_start_handler, task_cancel_handler)
             task_cancels: a dict of task cancel handlers for each task type
+            on_snapshot: callback invoked with the latest state snapshot after each sync
 
 
         """
@@ -185,6 +188,7 @@ class Sync:
             self.casing("running_tasks") if expose_running_tasks else None
         )
         self.logger = logger
+        self.on_snapshot = on_snapshot
 
         # Convert list[str] include to dict format
         if isinstance(include, list):
@@ -372,6 +376,8 @@ class Sync:
         if len(patch) > 0:
             await self.session.send(patch_event(self.key), patch)
             self._last_sync = t
+            if self.on_snapshot:
+                await nonblock_call(self.on_snapshot, self.state_snapshot)
 
     async def __call__(
         self,
@@ -500,6 +506,8 @@ class Sync:
     async def _send_state(self, _: Any = None):
         self.state_snapshot = self._snapshot()
         await self.session.send(set_event(self.key), self.state_snapshot)
+        if self.on_snapshot:
+            await nonblock_call(self.on_snapshot, self.state_snapshot)
 
     async def _set_state(self, new_state: dict[str, Any]):
         for key, value in new_state.items():

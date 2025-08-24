@@ -19,11 +19,13 @@ __all__ = [
     "SessionState",
     "Synced",
     "SyncedAsCamelCase",
+    "watch_sync",
     # globals
     "session_context",
     "get_user_session",
 ]
 
+from .debug_cli import watch_sync
 from .decorators import (
     remote_action,
     remote_task,
