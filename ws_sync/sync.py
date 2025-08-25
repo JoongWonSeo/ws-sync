@@ -488,8 +488,11 @@ class Sync:
             attr_name = self.key_to_attr[key]
             value = deepcopy(val)
 
+            # if isinstance(self.obj, BaseModel):
+            #     value = validate_model_field(type(self.obj), attr_name, value)
             if attr_name in self.type_adapters:
                 value = self.type_adapters[attr_name].validate_python(value)
+
             try:
                 setattr(self.obj, attr_name, value)
             except AttributeError:
@@ -533,6 +536,8 @@ class Sync:
             attr_name = self.key_to_attr[key]
             value = deepcopy(self.state_snapshot[key])
 
+            # if isinstance(self.obj, BaseModel):
+            #     value = validate_model_field(type(self.obj), attr_name, value)
             if attr_name in self.type_adapters:
                 value = self.type_adapters[attr_name].validate_python(value)
 

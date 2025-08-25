@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
+from functools import cache
 from typing import Any, cast
 
 from pydantic import AliasGenerator, BaseModel, TypeAdapter
@@ -67,19 +68,18 @@ def find_field_schema(model: type[BaseModel], field_name: str) -> CoreSchema:
         raise KeyError(field_name) from None
 
 
-cache: dict[tuple[type[BaseModel], str], SchemaValidator] = {}
+@cache
+def validator(model: type[BaseModel], field_name: str) -> SchemaValidator:
+    return SchemaValidator(find_field_schema(model, field_name))
 
 
 def validate_model_field(model: type[BaseModel], field_name: str, value: Any) -> Any:
     # Only enforce field-level validation during sync operations when
     # the model explicitly opts in via `validate_assignment=True`.
     # Otherwise, upstream TypeAdapters handle basic type coercion.
+    # TODO: find best way to configure this and when you'd even want this
     # model_cfg = getattr(model, "model_config", {})
     # if not model_cfg.get("validate_assignment", False):
     #     return value
 
-    if (validator := cache.get((model, field_name))) is None:
-        validator = SchemaValidator(find_field_schema(model, field_name))
-        cache[(model, field_name)] = validator
-
-    return validator.validate_python(value)
+    return validator(model, field_name).validate_python(value)
