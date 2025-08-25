@@ -94,8 +94,8 @@ class TestRemoteActionValidation:
         assert manager.received_priority == Priority.HIGH
 
         # Test invalid enum value should fail validation
-        with pytest.raises(ValueError):
-            invalid_action = {"type": "SET_PRIORITY", "priority": "invalid"}
+        invalid_action = {"type": "SET_PRIORITY", "priority": "invalid"}
+        with pytest.raises(ValueError):  # noqa: PT011
             await manager.sync.actions(invalid_action)
 
     @pytest.mark.asyncio
@@ -401,13 +401,13 @@ class TestRemoteActionValidation:
         manager = ErrorTestManager()
 
         # Test invalid enum
+        invalid_enum = {"type": "TEST_ENUM", "priority": "invalid_priority"}
         with pytest.raises((ValueError, TypeError)):
-            invalid_enum = {"type": "TEST_ENUM", "priority": "invalid_priority"}
             await manager.sync.actions(invalid_enum)
 
         # Test invalid model (missing required field)
+        invalid_model = {"type": "TEST_MODEL", "task": {"description": "No title"}}
         with pytest.raises((ValueError, TypeError)):
-            invalid_model = {"type": "TEST_MODEL", "task": {"description": "No title"}}
             await manager.sync.actions(invalid_model)
 
     @pytest.mark.asyncio
@@ -418,7 +418,7 @@ class TestRemoteActionValidation:
             title: str = "Default Task"
             priority: Priority = Priority.MEDIUM
 
-            def model_post_init(self, __context):
+            def model_post_init(self, context):
                 self.sync = Sync.all(self, key="TASK_MODEL")
 
             @remote_action("UPDATE_PRIORITY")
@@ -442,7 +442,7 @@ class TestRemoteActionValidation:
             task_title: str = "Default Task"
             task_priority: Priority = Priority.MEDIUM
 
-            def model_post_init(self, __context):
+            def model_post_init(self, context):
                 self.sync = Sync.all(self, key="CAMEL_TASK_MODEL")
 
             @remote_action("UPDATE_TASK_INFO")

@@ -212,6 +212,20 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi"
+version = "0.116.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/d7/6c8b3bfe33eeffa208183ec037fee0cce9f7f024089ab1c5d12ef04bd27c/fastapi-0.116.1.tar.gz", hash = "sha256:ed52cbf946abfd70c5a0dccb24673f0670deeb517a88b3544d03c2a6bf283143", size = 296485, upload-time = "2025-07-11T16:22:32.057Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/47/d63c60f59a59467fda0f93f46335c9d18526d7071f025cb5b89d5353ea42/fastapi-0.116.1-py3-none-any.whl", hash = "sha256:c46ac7c312df840f0c9e220f7964bada936781bc4e2e6eb71f1c4d7553786565", size = 95631, upload-time = "2025-07-11T16:22:30.485Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -855,6 +869,11 @@ dependencies = [
     { name = "starlette" },
 ]
 
+[package.optional-dependencies]
+fastapi = [
+    { name = "fastapi" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
@@ -864,14 +883,17 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
+    { name = "ws-sync", extra = ["fastapi"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", marker = "extra == 'fastapi'", specifier = ">=0.116.1" },
     { name = "jsonpatch", specifier = "~=1.33" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "starlette", specifier = ">=0.37.2" },
 ]
+provides-extras = ["fastapi"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -882,4 +904,5 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.0.0,<2" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
     { name = "pytest-xdist", specifier = ">=3.8.0,<4" },
+    { name = "ws-sync", extras = ["fastapi"], editable = "." },
 ]

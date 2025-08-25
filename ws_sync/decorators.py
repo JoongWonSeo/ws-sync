@@ -92,20 +92,42 @@ from types import EllipsisType
 from typing import overload
 
 
+@overload  # Usage without parentheses
+def sync[F: Callable](func: F, /) -> F: ...
+
+
+@overload  # Usage with parentheses
 def sync[F: Callable](
+    *,
     key: str | None = None,
     sync_all: bool = False,
     include: dict[str, str | EllipsisType] | list[str] | None = None,
     exclude: list[str] | None = None,
-    toCamelCase: bool | None = None,
+    toCamelCase: bool | None = None,  # noqa: N803
     send_on_init: bool = True,
     expose_running_tasks: bool = False,
     logger: Logger | None = None,
-) -> Callable[[F], F]:
+) -> Callable[[F], F]: ...
+
+
+def sync[F: Callable](
+    func: F | None = None,
+    /,
+    *,
+    key: str | None = None,
+    sync_all: bool = False,
+    include: dict[str, str | EllipsisType] | list[str] | None = None,
+    exclude: list[str] | None = None,
+    toCamelCase: bool | None = None,  # noqa: N803
+    send_on_init: bool = True,
+    expose_running_tasks: bool = False,
+    logger: Logger | None = None,
+) -> F | Callable[[F], F]:
     """
     Decorator for `__init__()`: Register the attributes that should be synced with the frontend.
 
     Args:
+        func: implicitly passed when used as a decorator
         key: unique key (matching the frontend key) to identify the object.
              If None, defaults to the class name.
         sync_all: sync all non-private attributes
@@ -116,10 +138,10 @@ def sync[F: Callable](
         expose_running_tasks: expose the list in the synced state as `running_tasks` or `runningTasks`
         logger: logger to use for logging
     """
-    from .sync import Sync
+    from .sync import Sync  # noqa: PLC0415
 
     def decorator(init_func: F) -> F:
-        def wrapper(self, *args, **kwargs):
+        def wrapper(self, *args, **kwargs):  # noqa: ANN001
             init_func(self, *args, **kwargs)
 
             sync_key = key if isinstance(key, str) else type(self).__name__
@@ -138,14 +160,18 @@ def sync[F: Callable](
 
         return wrapper  # type: ignore
 
-    return decorator
+    if func is None:  # @sync without parentheses
+        return decorator
+    # @sync(...) was used
+    return decorator(func)
 
 
 def sync_all(
     key: str | None = None,
+    *,
     include: dict[str, str | EllipsisType] | list[str] | None = None,
     exclude: list[str] | None = None,
-    toCamelCase: bool | None = None,
+    toCamelCase: bool | None = None,  # noqa: N803
     send_on_init: bool = True,
     expose_running_tasks: bool = False,
     logger: Logger | None = None,
@@ -177,7 +203,8 @@ def sync_all(
 
 def sync_only(
     _key: str | None = None,
-    _toCamelCase: bool | None = None,
+    *,
+    _toCamelCase: bool | None = None,  # noqa: N803
     _send_on_init: bool = True,
     _expose_running_tasks: bool = False,
     _logger: Logger | None = None,
@@ -207,17 +234,18 @@ def sync_only(
     )
 
 
-@overload  # Usage with parentheses
-def remote_action[F: Callable](key: str | None = None) -> Callable[[F], F]: ...
-
-
 @overload  # Usage without parentheses
 def remote_action[F: Callable](key: F) -> F: ...
+
+
+@overload  # Usage with parentheses
+def remote_action[F: Callable](key: str | None = None) -> Callable[[F], F]: ...
 
 
 def remote_action[F: Callable](key: str | None | F = None) -> F | Callable[[F], F]:
     """
     Decorator for methods: Expose the method as an action to the frontend.
+
     An action is a "synchronous" method that blocks the backend logic until it completes.
     Of course, the method should be `async` to allow for non-blocking concurrency with other parallel sessions of the server.
 
@@ -234,14 +262,15 @@ def remote_action[F: Callable](key: str | None | F = None) -> F | Callable[[F], 
     if callable(key):  # @remote_action without parentheses
         func = key  # key is actually the function
         return decorator(func)
-    else:  # @remote_action(...) was used
-        decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
-        return decorator
+    # @remote_action(...) was used
+    decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
+    return decorator
 
 
 def find_remote_actions(cls: type) -> dict[str, Callable]:
     """
     Find all remote actions in a class.
+
     Returns a dictionary of action keys to the function.
     """
     actions: dict[str, Callable] = {}
@@ -257,17 +286,18 @@ def find_remote_actions(cls: type) -> dict[str, Callable]:
     return actions
 
 
-@overload  # Usage with parentheses
-def remote_task[F: Callable](key: str | None = None) -> Callable[[F], F]: ...
-
-
 @overload  # Usage without parentheses
 def remote_task[F: Callable](key: F) -> F: ...
 
 
-def remote_task[F: Callable](key: str | None | F = None) -> Callable[[F], F] | F:
+@overload  # Usage with parentheses
+def remote_task[F: Callable](key: str | None = None) -> Callable[[F], F]: ...
+
+
+def remote_task[F: Callable](key: str | None | F = None) -> F | Callable[[F], F]:
     """
     Decorator for methods: Expose the method as a long-running task to the frontend.
+
     A task is a "non-blocking" method that runs concurrently with the backend logic.
     The frontend can cancel the task at any time, so you should also implement a `@remote_task_cancel` method to cancel the task.
 
@@ -285,14 +315,15 @@ def remote_task[F: Callable](key: str | None | F = None) -> Callable[[F], F] | F
     if callable(key):  # @remote_task without parentheses
         func = key  # key is actually the function
         return decorator(func)
-    else:  # @remote_task(...) was used
-        decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
-        return decorator
+    # @remote_task(...) was used
+    decorator.forgot_to_call = True  # type: ignore[reportFunctionMemberAccess]
+    return decorator
 
 
 def find_remote_tasks(cls: type) -> dict[str, Callable]:
     """
     Find all remote tasks in a class.
+
     Returns a dictionary of task keys to the function.
     """
     tasks: dict[str, Callable] = {}
@@ -311,6 +342,7 @@ def find_remote_tasks(cls: type) -> dict[str, Callable]:
 def remote_task_cancel[F: Callable](key: str) -> Callable[[F], F]:
     """
     Decorator for methods: Expose the method as a task-canceller to the frontend.
+
     A task-canceller is a method that cancels a running task.
     The method `f` decorated with `@remote_task` has a corresponding cancel decorator `@f.cancel`:
     ```python
@@ -336,6 +368,7 @@ def remote_task_cancel[F: Callable](key: str) -> Callable[[F], F]:
 def find_remote_task_cancellers(cls: type) -> dict[str, Callable]:
     """
     Find all remote task-cancellers in a class.
+
     Returns a dictionary of task-canceller keys to the function.
     """
     cancellers: dict[str, Callable] = {}

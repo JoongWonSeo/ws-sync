@@ -393,7 +393,7 @@ class TestPartialSyncListInclude:
 
         # Use sync() instead of sync_all() to test include as restrictive
         class TestClass:
-            @sync("TEST", include=["field1", "field2"])
+            @sync(key="TEST", include=["field1", "field2"])
             def __init__(self):
                 self.field1 = "value1"
                 self.field2 = "value2"

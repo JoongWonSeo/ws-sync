@@ -5,11 +5,10 @@ description = "Keep objects synchronized over a persistent WebSocket session"
 authors = [{ name = "Joong-Won Seo", email = "joong.won.seo@gmail.com" }]
 requires-python = ">=3.12"
 readme = "README.md"
-dependencies = [
-    "starlette>=0.37.2",
-    "jsonpatch~=1.33",
-    "pydantic>=2,<3",
-]
+dependencies = ["starlette>=0.37.2", "jsonpatch~=1.33", "pydantic>=2,<3"]
+
+[project.optional-dependencies]
+fastapi = ["fastapi>=0.116.1"]
 
 [dependency-groups]
 dev = [
@@ -20,34 +19,92 @@ dev = [
     "pyright[nodejs]>=1.1.402,<2",
     "pytest-cov>=6.2.1",
     "httpx>=0.28.1",
+    "ws-sync[fastapi]",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+
+[tool.uv.sources]
+ws-sync = { workspace = true }
+
 [tool.ruff]
 target-version = "py312"
 
 [tool.ruff.lint]
 select = [
-    "E",     # pycodestyle
-    "F",     # pyflakes
-    "UP",    # pyupgrade
-    "B",     # flake8-bugbear
-    "SIM",   # flake8-simplify
-    "I",     # isort
-    "ASYNC", # flake8-async
+    "ALL",
+    "D213", # explicitly enable second-line docstring
 ]
 extend-safe-fixes = ["UP"]
 ignore = [
+    # When using select ALL: https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+    "W191",
+    "E111",
+    "E114",
+    "E117",
+    "D206",
+    "D300",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "COM812",
+    "COM819",
+
+    # Important ignores
+    "TC", # will mess with runtime type annotations
+
+    # Global personal preferences
+    "S101",   # allow assert, I'll be careful
+    "ANN002", # allow function args
+    "ANN003", # allow function return type
+    "ANN2",   # pyright is good at return type inference
+    "ANN401", # explicit any is fine
+    "EM",     # error message too pedantic
     "E501",   # line too long (formatter takes care of this, prompt strings have to be long)
-    "E741",   # variable names l and O are forbidden
-    "E402",   # module level import not at top of file
-    "B027",   # empty method without abstract decorator
-    "B028",   # no explicit stacklevel keyword argument in warnings
-    "SIM102", # Combine nested ifs
+    "C901",   # complex functions can make sense in some cases
+    "ERA001", # commented out code
+    "D1",     # not every public stuff deserves a docstring
+    "D200",   # don't require one-line docstring
+    "D415",   # don't require sentence punctuation
+    "D212",   # enforce second-line docstring
+    "PGH003", # doesn't work well with vscode
+    "TD",     # TODOs are fine
+    "FIX",    # Allow TODOs, FIXMEs, etc.
+    "RET504", # assigning before returning can be more readable
+    "RET505", # else return can be more readable
+
+    # Per-project preferences
+    "PLR09",  # too many Xs
+    "RUF012", # pydantic deals with field mutable defaults 
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = [
+    "S101",    # ofc we need asserts in tests
+    "PLR2004", # we need "magic values" to test
+    "T201",    # allow print statements
+    "D",       # don't require docs
+    "ARG001",  # allow unused function arguments
+    "ARG002",  # allow unused method arguments
+    "ANN001",  # don't require function args
+    "ANN201",  # don't require return type annotations
+    "SLF001",  # allow private member access in tests
+    "PT018",   # allow composite assertions
+    "TRY003",  # allow try/except without specific exception
+    "PLC0415", # allow nested imports
+
+    # Per-project preferences
+    "N", # we need to test weird naming
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+ignore-var-parameters = true # don't require docs for *args and **kwargs
+
 
 [tool.pyright]
 typeCheckingMode = "standard"

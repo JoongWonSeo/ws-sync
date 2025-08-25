@@ -71,8 +71,8 @@ class TestRemoteTaskValidation:
         runner = TaskRunner()
 
         # Test invalid enum
+        invalid_task = {"type": "VALIDATE_PRIORITY", "priority": "invalid_priority"}
         with pytest.raises((ValueError, TypeError)):
-            invalid_task = {"type": "VALIDATE_PRIORITY", "priority": "invalid_priority"}
             await runner.sync.tasks(invalid_task)
 
     @pytest.mark.asyncio

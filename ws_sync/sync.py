@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from copy import deepcopy
@@ -28,6 +29,8 @@ from ws_sync.decorators import (
 from ws_sync.utils import get_alias_function_for_class, nonblock_call
 
 from .session import session_context
+
+logger = logging.getLogger(__name__)
 
 
 # Event Type Helpers
@@ -99,9 +102,10 @@ class Sync:
         cls,
         obj: object,
         key: str,
+        *,
         include: dict[str, str | EllipsisType] | list[str] | None = None,
         exclude: list[str] | None = None,
-        toCamelCase: bool | None = None,
+        toCamelCase: bool | None = None,  # noqa: N803
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
@@ -129,7 +133,8 @@ class Sync:
         cls,
         _obj: object,
         _key: str,
-        _toCamelCase: bool | None = None,
+        *,
+        _toCamelCase: bool | None = None,  # noqa: N803
         _send_on_init: bool = True,
         _expose_running_tasks: bool = False,
         _logger: Logger | None = None,
@@ -157,10 +162,11 @@ class Sync:
         self,
         obj: object,
         key: str,
+        *,
         sync_all: bool = False,
         include: dict[str, str | EllipsisType] | list[str] | None = None,
         exclude: list[str] | None = None,
-        toCamelCase: bool | None = None,
+        toCamelCase: bool | None = None,  # noqa: N803
         send_on_init: bool = True,
         expose_running_tasks: bool = False,
         logger: Logger | None = None,
@@ -176,7 +182,8 @@ class Sync:
             key: unique key for this object
 
             sync_all: whether to sync all non-private attributes
-            include: attribute names to sync, value being either ... or a string of the key of the attribute
+            include: attribute names to sync, value being either ...
+                or a string of the key of the attribute
             exclude: list of attributes to exclude from syncing
 
             toCamelCase: convert attribute names to camelCase. Must be ``None`` for
@@ -206,18 +213,16 @@ class Sync:
 
         # Convert list[str] include to dict format
         if isinstance(include, list):
-            include = {attr: ... for attr in include}
+            include = dict.fromkeys(include, ...)
         include = include or {}
         exclude = exclude or []
 
         # Validate that BaseModel objects don't use custom sync keys
         if isinstance(obj, BaseModel) and include:
             for attr_name, sync_key in include.items():
-                if sync_key is not ...:
-                    raise AssertionError(
-                        f"Custom sync key '{sync_key}' for attribute '{attr_name}' is not allowed for Pydantic models. "
-                        "Use pydantic's alias_generator in model_config instead."
-                    )
+                assert sync_key is ..., (
+                    f"Custom sync key '{sync_key}' for attribute '{attr_name}' is not allowed for Pydantic models. Use pydantic's alias_generator in model_config instead."
+                )
 
         self.session = session_context.get()
         assert self.session, "No session set, use the session.session_context variable!"
@@ -297,10 +302,10 @@ class Sync:
 
         # ========== Debugging ========== #
         if self.logger:
-            self.logger.debug(f"{self.key}: Syncing {self.sync_attributes}")
-            self.logger.debug(f"{self.key}: Actions {actions}")
-            self.logger.debug(f"{self.key}: Tasks {tasks}")
-            self.logger.debug(f"{self.key}: Task Cancels {task_cancels}")
+            self.logger.debug("%s: Syncing %s", self.key, self.sync_attributes)
+            self.logger.debug("%s: Actions %s", self.key, actions)
+            self.logger.debug("%s: Tasks %s", self.key, tasks)
+            self.logger.debug("%s: Task Cancels %s", self.key, task_cancels)
 
         assert include.keys().isdisjoint(exclude), "Attribute in both include & exclude"
         assert all(a in dir(obj) for a in self.sync_attributes), "Attribute not found"
@@ -308,16 +313,6 @@ class Sync:
         # assert (
         #     len(self.sync_attributes) + expose_running_tasks > 0
         # ), "No attributes to sync"
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=DeprecationWarning)
-            for attr in dir(obj):
-                try:
-                    if hasattr(getattr(obj, attr), "forgot_to_call"):
-                        raise Exception(
-                            f'You did @remote_action instead of @remote_action(...) for attribute "{attr}"'
-                        )
-                except AttributeError:
-                    pass
 
         # ========== Field Type Adapters (cached) ========== #
         self.type_adapters: dict[str, TypeAdapter[Any]] = self.build_field_validators(
@@ -357,9 +352,9 @@ class Sync:
         self,
         if_since_last: float | None = None,
         toast: str | None = None,
-        type: ToastType = "default",
+        type: ToastType = "default",  # noqa: A002
     ):
-        """@public
+        """
         Sync all registered attributes.
 
         Args:
@@ -380,18 +375,22 @@ class Sync:
     async def send_binary(self, metadata: dict[str, Any], data: bytes):
         """
         Send binary data to the frontend, along with metadata.
+
         This is a subset of an action, but with bytes data always included.
         """
         await self.session.send_binary(action_event(self.key), metadata, data)
 
     async def toast(
-        self, *messages, type: ToastType = "default", logger: Logger | None = None
+        self,
+        *messages,
+        type: ToastType = "default",  # noqa: A002
+        logger: Logger | None = None,
     ) -> str:
         """
         Send a toast message to the frontend.
+
         Returns the sent message content, so that you can easily return or print it.
         """
-
         messages = " ".join(str(message) for message in messages)
 
         if lg := (logger or self.logger):
@@ -410,18 +409,17 @@ class Sync:
         await self.session.send(toast_event(), {"type": type, "message": messages})
         return messages
 
-    async def download(self, filename: str, binary: bytes):
+    async def download(self, filename: str, binary: bytes) -> None:
         """
         Send a file to the frontend for download.
         """
         data = base64.b64encode(binary).decode("utf-8")
         await self.session.send(download_event(), {"filename": filename, "data": data})
 
-    def observe(self, obj: object, **sync_attributes: str | EllipsisType):
+    def observe(self, obj: object, **sync_attributes: str | EllipsisType) -> None:
         """
         Observe additional attributes, useful for when you're extending/subclassing an already Synced object, or when you want to observe multiple objects.
         """
-        ...
         # TODO: append, deregister, re-register
 
     # ========== Low-Level: State Management ========== #
@@ -483,12 +481,12 @@ class Sync:
         await self.session.send(set_event(self.key), self.state_snapshot)
 
     async def _set_state(self, new_state: dict[str, Any]):
-        for key, value in new_state.items():
+        for key, val in new_state.items():
             if key == self.task_exposure:
                 continue
 
             attr_name = self.key_to_attr[key]
-            value = deepcopy(value)
+            value = deepcopy(val)
 
             if attr_name in self.type_adapters:
                 value = self.type_adapters[attr_name].validate_python(value)
@@ -508,7 +506,6 @@ class Sync:
                 # For other readonly attributes, skip setting
                 # Don't assert value equality because dependent properties may have changed
                 # when other attributes were set earlier in this loop
-                pass
 
         self.state_snapshot = new_state  # update latest snapshot
 
@@ -555,7 +552,6 @@ class Sync:
                 # For other readonly attributes, skip setting
                 # Don't assert value equality because dependent properties may have changed
                 # when other attributes were set earlier in this loop
-                pass
 
     def _create_action_handler(
         self,
@@ -589,7 +585,7 @@ class Sync:
                         handler, **kwargs
                     )  # handler is bound to an instance
             else:
-                warnings.warn(f"No handler for action {action_type}")
+                warnings.warn(f"No handler for action {action_type}", stacklevel=1)
 
         return _handle_action
 
@@ -607,7 +603,7 @@ class Sync:
                 await task
             except asyncio.CancelledError:
                 if self.logger:
-                    self.logger.info(f"Task {task_type} cancelled")
+                    self.logger.info("Task %s cancelled", task_type)
                 if on_cancel and task_type in on_cancel:
                     await on_cancel[task_type]()
                 raise
@@ -621,7 +617,7 @@ class Sync:
             if factory := factories.get(task_type):
                 if task_type in self.running_tasks:
                     if self.logger:
-                        self.logger.warning(f"Task {task_type} already running")
+                        self.logger.warning("Task %s already running", task_type)
                     return
 
                 if validator := self.task_validators.get(task_type):
@@ -652,15 +648,14 @@ class Sync:
                 if self.task_exposure:
                     await self.sync()
             else:
-                warnings.warn(f"No factory for task {task_type}")
+                warnings.warn(f"No factory for task {task_type}", stacklevel=1)
 
         async def _cancel_task(task_args: dict):
             task_type = task_args.pop("type")
             if running_task := self.running_tasks.get(task_type):
                 running_task.cancel()
-            else:
-                if self.logger:
-                    self.logger.warning(f"Task {task_type} not running")
+            elif self.logger:
+                self.logger.warning("Task %s not running", task_type)
 
         return _create_task, _cancel_task
 
@@ -708,13 +703,14 @@ class Sync:
             model_name,
             __config__=cfg,
             __module__=target_cls.__module__,
-            **cast(dict[str, Any], fields),
+            **cast("dict[str, Any]", fields),
         )
         return model
 
     @staticmethod
     def build_field_validators(
         target_cls: type,
+        *,
         field_whitelist: Iterable[str] | None = None,
         use_cache: bool = True,
     ) -> dict[str, TypeAdapter[Any]]:
@@ -732,16 +728,10 @@ class Sync:
         validators: dict[str, TypeAdapter[Any]] = {}
         if issubclass(target_cls, BaseModel):
             for name, field in target_cls.model_fields.items():
-                print(f"Building validator for field {name}: {field.annotation}")
                 validators[name] = TypeAdapter(field.annotation)
             for name, field in target_cls.model_computed_fields.items():
-                print(
-                    f"Building validator for computed field {name}: {field.return_type}"
-                )
                 validators[name] = TypeAdapter(field.return_type)
-            print(
-                f"Built {len(validators)} field validators for {target_cls.__name__} using model fields"
-            )
+
         else:
             type_hints = get_type_hints(target_cls)
             if field_whitelist is not None:
@@ -751,14 +741,10 @@ class Sync:
                     if (annotation := type_hints.get(field))
                 }
             for name, annotation in type_hints.items():
-                print(f"Building validator for {name}: {annotation}")
                 try:
                     validators[name] = TypeAdapter(annotation)
-                except PydanticSchemaGenerationError as e:
-                    print(f"Error building validator for {name}: {e}")
-            print(
-                f"Built {len(validators)} field validators for {target_cls.__name__} using type hints"
-            )
+                except PydanticSchemaGenerationError:
+                    logger.exception("Error building validator for %s", name)
 
         if use_cache:
             Sync._field_validators_cache[target_cls] = validators
@@ -767,6 +753,7 @@ class Sync:
     @staticmethod
     def build_action_validators(
         target_cls: type,
+        *,
         actions: dict[str, Callable[..., Any]] | None = None,
         schema_title_generator: SchemaTitleGenerator = default_action_title_generator,
         param_alias_generator: Callable[[str], str] | AliasGenerator | None = None,
@@ -777,6 +764,7 @@ class Sync:
 
         Args:
             target_cls: The class whose actions to build validators for.
+            actions: A dictionary of action names to functions. If None, all actions are included.
             schema_title_generator: A function to set the JSON schema title for each action.
             param_alias_generator: A function to set the JSON schema alias for the action *parameter names*.
             use_cache: Whether to use the cache for the validator objects.
@@ -812,6 +800,7 @@ class Sync:
     @staticmethod
     def build_task_validators(
         target_cls: type,
+        *,
         tasks: dict[str, Callable[..., Any]] | None = None,
         schema_title_generator: SchemaTitleGenerator = default_task_title_generator,
         param_alias_generator: Callable[[str], str] | AliasGenerator | None = None,
@@ -822,6 +811,7 @@ class Sync:
 
         Args:
             target_cls: The class whose tasks to build validators for.
+            tasks: A dictionary of task names to functions. If None, all tasks are included.
             schema_title_generator: A function to set the JSON schema title for each task.
             param_alias_generator: A function to set the JSON schema alias for the task *parameter names*.
             use_cache: Whether to use the cache for the validator objects.

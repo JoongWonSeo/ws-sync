@@ -198,7 +198,7 @@ def test_patch_snake_case(mock_session: Mock):
 
 def test_init_uses_field_names(mock_session: Mock):
     with pytest.raises(ValidationError):
-        Person(**{"firstName": "John", "last_name": "Doe"})
+        Person(**{"firstName": "John", "last_name": "Doe"})  # noqa: PIE804
 
 
 # subclass behavior

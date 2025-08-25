@@ -409,8 +409,8 @@ class TestMultipleObjectsAndSessions:
 
     @pytest.mark.asyncio
     async def test_cross_session_independence_for_sync_and_async_handlers(self):
-        asynA_duration = Duration(0.05)
-        asynC_duration = Duration(0.01)
+        async_a_duration = Duration(0.05)
+        async_c_duration = Duration(0.01)
 
         class Svc1:
             sync: Sync
@@ -420,12 +420,12 @@ class TestMultipleObjectsAndSessions:
                 self.stamps: list[float] = []
 
             @remote_action("ASYNCA")
-            async def asynA(self):
+            async def async_a(self):
                 self.stamps.append(perf_counter())
-                await asyncio.sleep(asynA_duration.seconds)
+                await asyncio.sleep(async_a_duration.seconds)
 
             @remote_action("SYNCB")
-            def syncB(self):
+            def sync_b(self):
                 self.stamps.append(perf_counter())
 
         class Svc2:
@@ -436,12 +436,12 @@ class TestMultipleObjectsAndSessions:
                 self.stamps: list[float] = []
 
             @remote_action("ASYNCC")
-            async def asynC(self):
+            async def async_c(self):
                 self.stamps.append(perf_counter())
-                await asyncio.sleep(asynC_duration.seconds)
+                await asyncio.sleep(async_c_duration.seconds)
 
             @remote_action("SYNCD")
-            def syncD(self):
+            def sync_d(self):
                 self.stamps.append(perf_counter())
 
         s1 = Session()

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from contextvars import ContextVar, Token
 from logging import Logger
-from typing import Any
+from typing import Any, Self
 
 from starlette.websockets import (  # type: ignore[reportMissingImports]
     WebSocket,
@@ -22,6 +22,8 @@ session_context: ContextVar[Session] = ContextVar("session_context")
 
 class Session:
     """
+    A session is a persistent connection with the other.
+
     This is a counter-part to the SessionManager in the frontend.
     There should be one instance of this class per user session, even across reconnects of the websocket. This means the states that belong to the user session should be subscribed to the events of this class.
     It defines a simple state-syncing protocol between the frontend and the backend, every event being of type {type: str, data: any}.
@@ -44,15 +46,15 @@ class Session:
 
     # ===== Low-Level: Register Event Callbacks =====#
     def register_event(self, event: str, callback: Callable[..., Any]):
-        if event in self.event_handlers:
-            # raise Exception(f"Event {event} already has a subscriber.")
-            if self.logger:
-                self.logger.warning(f"Event {event} already has a subscriber.")
+        if event in self.event_handlers and self.logger:
+            self.logger.warning("Event %s already has a subscriber.", event)
         self.event_handlers[event] = callback
 
     def deregister_event(self, event: str):
         if event not in self.event_handlers:
-            raise Exception(f"Event {event} has no subscriber.")
+            if self.logger:
+                self.logger.warning("Event %s has no subscriber.", event)
+            return
         del self.event_handlers[event]
 
     def register_init(self, callback: Callable[..., Any]):
@@ -67,7 +69,9 @@ class Session:
             if self.ws is not None:
                 if self.logger:
                     self.logger.warning(
-                        f"Overwriting existing websocket {self.ws.client} with {ws.client})"
+                        "Overwriting existing websocket %s with %s",
+                        self.ws.client,
+                        ws.client,
                     )
                 await self.disconnect()
             self.ws = ws
@@ -84,8 +88,8 @@ class Session:
     ):
         """
         Disconnect the websocket connection after sending a message.
-        TODO: not sure why I made the ws argument, but I will keep it for now.
         """
+        # TODO: not sure why I made the ws argument, but I will keep it for now.
         if ws:
             self.ws = ws
         if self.ws is None:
@@ -105,9 +109,9 @@ class Session:
             return
         try:
             await self.ws.send_json({"type": event, "data": data})
-        except Exception as e:
+        except Exception:
             if self.logger:
-                self.logger.error(f"Error sending event {event}: {e}")
+                self.logger.exception("Error sending event %s", event)
 
     async def send_binary(self, event: str, metadata: dict[str, Any], data: bytes):
         if self.ws is None:
@@ -117,9 +121,9 @@ class Session:
                 {"type": "_BIN_META", "data": {"type": event, "metadata": metadata}}
             )
             await self.ws.send_bytes(data)
-        except Exception as e:
+        except Exception:
             if self.logger:
-                self.logger.error(f"Error sending binary event {event}: {e}")
+                self.logger.exception("Error sending binary event %s", event)
 
     async def handle_connection(self, ws: WebSocket | None = None):
         """
@@ -156,11 +160,10 @@ class Session:
 
                     if handler := self.event_handlers.get(event):
                         await nonblock_call(handler, data)
-                    else:
-                        if self.logger:
-                            self.logger.warning(
-                                f"Received event {event} but no subscriber was found."
-                            )
+                    elif self.logger:
+                        self.logger.warning(
+                            "Received event %s but no subscriber was found.", event
+                        )
             except WebSocketDisconnect:
                 if self.logger:
                     self.logger.info("Websocket disconnected")
@@ -174,16 +177,14 @@ class Session:
                 except Exception:
                     if self.logger:
                         self.logger.exception("Error while calling state.on_disconnect")
-                try:
+                with suppress(Exception):
                     ws = self.ws
                     self.ws = None
                     if ws is not None:
                         await ws.close()
-                except Exception:
-                    pass  # ignore errors during closing
 
     # ===== High-Level: Context Manager =====#
-    def __enter__(self) -> Session:
+    def __enter__(self) -> Self:
         self.token = session_context.set(self)
         return self
 
@@ -191,7 +192,7 @@ class Session:
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
-        traceback: Any,
+        traceback: object,
     ):
         if self.token:
             session_context.reset(self.token)
@@ -205,12 +206,9 @@ class SessionState:
 
     async def on_connect(self):
         """Called after the websocket connection is established."""
-        pass
 
     async def on_disconnect(self):
         """Called after the websocket connection is closed."""
-        pass
 
     async def on_terminate(self):
         """Called when the session is forcefully terminated by the server."""
-        pass

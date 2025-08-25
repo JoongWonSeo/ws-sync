@@ -2,7 +2,7 @@
 .. include:: ../README.md
 """
 
-__all__ = [
+__all__ = [  # noqa: RUF022
     # submodules
     "decorators",
     "session",

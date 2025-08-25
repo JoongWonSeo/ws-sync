@@ -61,7 +61,7 @@ class Synced:
         Initialize the subclass with the sync_key.
 
         Args:
-            sync_key: The key to use for the sync object.
+            is_abstract: Whether your subclass is still abstract, i.e. not meant to be instantiated.
         """
         super().__init_subclass__(**kwargs)
         if not is_abstract:
@@ -78,18 +78,27 @@ class Synced:
     @classmethod
     def ws_sync_json_schema(
         cls,
+        *,
+        always_include_validation_schema: bool = True,
         schema_generator: type[GenerateJsonSchema] = GenerateJsonSchema,
         ref_template: str = "#/$defs/{model}",
     ):
-        """
-        Returns a JSON schema suitable for ws_sync, meaning the model (all of its fields) as serialization, its action and task inputs as validation.
-        """
+        """Returns a JSON schema suitable for ws_sync, meaning the model (all of its fields) as serialization, its action and task inputs as validation."""
         assert issubclass(cls, BaseModel), f"{cls.__name__} must inherit from BaseModel"
+
         cls.generate_validators()
+
+        # action and task validation schema
         validation = list(cls.action_validators.items()) + list(
             cls.task_validators.items()
         )
-        serialization = [("MODEL", TypeAdapter(cls))]
+        if always_include_validation_schema:
+            validation.append(("MODEL CREATE", TypeAdapter(cls)))
+
+        # model state serialization schema
+        serialization = [("MODEL STATE", TypeAdapter(cls))]
+
+        # merge all schemas
         schema_inputs: list = [
             (sync_key, "validation", validator) for sync_key, validator in validation
         ] + [
@@ -99,10 +108,6 @@ class Synced:
         schemas = TypeAdapter.json_schemas(
             schema_inputs, schema_generator=schema_generator, ref_template=ref_template
         )
-
-        # # merge with model schema
-        # model_schema = cls.model_json_schema()
-        # model_schema["definitions"] = schemas
         return schemas
 
 
