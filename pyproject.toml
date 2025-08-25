@@ -20,6 +20,8 @@ dev = [
     "pytest-cov>=6.2.1",
     "httpx>=0.28.1",
     "ws-sync[fastapi]",
+    "poethepoet>=0.37.0",
+    "ruff>=0.12.10",
 ]
 
 [build-system]
@@ -104,6 +106,15 @@ ignore = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 ignore-var-parameters = true # don't require docs for *args and **kwargs
+
+
+[tool.poe.tasks]
+lint = "ruff check --fix"
+format = "ruff format"
+ruff = ["lint", "format"]
+typecheck = "pyright"
+test = "pytest"
+verify = ["lint", "format", "typecheck", "test"]
 
 
 [tool.pyright]
