@@ -35,7 +35,7 @@ class AliasModel(BaseModel):
         (AliasModel, "AliasModel", "AliasModel"),
     ],
 )
-def test_schema_def_names(
+def test_schema_def_names_both_modes(
     model_cls: type[BaseModel], expected_val: str, expected_ser: str
 ) -> None:
     # Use models_json_schema to force $defs and $ref
@@ -84,3 +84,38 @@ def test_collision_handling_different_modules() -> None:
 
     assert ser_ref_1 == "User"
     assert ser_ref_2 == "User2"
+
+
+def test_validation_only_keeps_base_name_when_no_conflict() -> None:
+    # When requesting only validation, even if the two modes would diverge,
+    # validation should keep the base name (no Create prefix needed).
+    from pydantic.json_schema import models_json_schema
+
+    (schemas_map, envelope) = models_json_schema(
+        [(DefaultedModel, "validation")],
+        schema_generator=CustomGenerateJsonSchema,
+    )
+
+    assert "$defs" in envelope
+
+    val_schema = schemas_map[(DefaultedModel, "validation")]
+    ref = val_schema.get("$ref")
+    assert isinstance(ref, str) and ref.startswith("#/$defs/")
+    assert ref.split("#/$defs/")[-1] == "DefaultedModel"
+
+
+def test_serialization_only_keeps_base_name_when_no_conflict() -> None:
+    # When requesting only serialization, it should also keep the base name.
+    from pydantic.json_schema import models_json_schema
+
+    (schemas_map, envelope) = models_json_schema(
+        [(DefaultedModel, "serialization")],
+        schema_generator=CustomGenerateJsonSchema,
+    )
+
+    assert "$defs" in envelope
+
+    ser_schema = schemas_map[(DefaultedModel, "serialization")]
+    ref = ser_schema.get("$ref")
+    assert isinstance(ref, str) and ref.startswith("#/$defs/")
+    assert ref.split("#/$defs/")[-1] == "DefaultedModel"

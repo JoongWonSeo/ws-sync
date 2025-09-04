@@ -189,16 +189,20 @@ class CustomGenerateJsonSchema(GenerateJsonSchema):
                 )
 
             if val_seed:
-                if (
-                    ser_schema is not None
-                    and val_schema is not None
-                    and ser_schema == val_schema
-                ):
-                    # identical: use base as well
+                if ser_seed is None:
+                    # Only validation requested: keep base name (no prefix)
+                    val_target = base_name
+                    val_fallbacks = [c for c in val_alts if c != base_name]
+                elif val_schema is None:
+                    # Shouldn't happen in practice, but fall back to base
+                    val_target = base_name
+                    val_fallbacks = [c for c in val_alts if c != base_name]
+                elif ser_schema == val_schema:
+                    # Both modes present and identical: use base for validation
                     val_target = base_name
                     val_fallbacks = [c for c in val_alts if c != base_name]
                 else:
-                    # different: use Create+base when possible
+                    # Both modes present and different: use Create+base for validation
                     create_base = DefsRef(f"Create{base_name}")
                     val_target = create_base
                     val_fallbacks = [c for c in val_alts if c != base_name]
