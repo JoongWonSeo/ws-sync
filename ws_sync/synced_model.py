@@ -118,12 +118,14 @@ class Synced:
 
         # helps the frontend to know the possible actions
         schemas[("REMOTE ACTIONS KEYS", "validation")] = {
+            "description": "Lists all action keys as enum values",
             "type": "string",
             "enum": action_keys,
             "title": f"{cls.__name__}ActionsKeys",
         }
         # helps the frontend to know the possible parameters for each action
         schemas[("REMOTE ACTIONS PARAMS", "validation")] = {
+            "description": "Maps each action keys to its parameters",
             "properties": {
                 actions: schemas[(actions, "validation")] for actions in action_keys
             },
