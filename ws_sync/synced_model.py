@@ -1,6 +1,10 @@
+from copy import deepcopy
+
 from pydantic import AliasGenerator, BaseModel, ConfigDict, PrivateAttr, TypeAdapter
 from pydantic.alias_generators import to_camel
 from pydantic.json_schema import GenerateJsonSchema
+
+from ws_sync.utils.json_schema import CustomGenerateJsonSchema
 
 from .sync import Sync
 
@@ -105,10 +109,62 @@ class Synced:
             (sync_key, "serialization", serializer)
             for sync_key, serializer in serialization
         ]
-        schemas = TypeAdapter.json_schemas(
+        schemas, dependencies = TypeAdapter.json_schemas(
             schema_inputs, schema_generator=schema_generator, ref_template=ref_template
         )
-        return schemas
+
+        # Attach helper schemas for the remote actions
+        action_keys: list[str] = list(cls.action_validators)
+
+        # helps the frontend to know the possible actions
+        schemas[("REMOTE ACTIONS KEYS", "validation")] = {
+            "type": "string",
+            "enum": action_keys,
+            "title": f"{cls.__name__}ActionsKeys",
+        }
+        # helps the frontend to know the possible parameters for each action
+        schemas[("REMOTE ACTIONS PARAMS", "validation")] = {
+            "properties": {
+                actions: schemas[(actions, "validation")] for actions in action_keys
+            },
+            "required": action_keys,
+            "title": f"{cls.__name__}ActionsParams",
+            "type": "object",
+        }
+
+        return schemas, dependencies
+
+    @classmethod
+    def attach_to_openapi(
+        cls,
+        openapi: dict,
+        schema_generator: type[GenerateJsonSchema] = CustomGenerateJsonSchema,
+    ) -> dict:
+        openapi = deepcopy(openapi)
+
+        if "components" not in openapi:
+            openapi["components"] = {"schemas": {}}
+
+        schemas, definitions = cls.ws_sync_json_schema(
+            schema_generator=schema_generator,
+            ref_template="#/components/schemas/{model}",
+        )
+        deps = definitions.pop("$defs", {})
+        # either the remaining schema is a schema, or a $ref to a schema in deps
+        for schema in schemas.values():
+            if "title" in schema:
+                # schema is a schema
+                openapi["components"]["schemas"].update(
+                    {
+                        schema["title"]: schema,
+                    }
+                )
+            else:
+                # schema is a $ref to a schema, so already contained in deps
+                pass
+        openapi["components"]["schemas"].update(deps)
+
+        return openapi
 
 
 class SyncedAsCamelCase(Synced, is_abstract=True):
