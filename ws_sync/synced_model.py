@@ -187,9 +187,10 @@ def nullify_if_empty(schema: dict, definitions: dict) -> dict:
     A simple function that checks whether the given object schema is an empty object. If it is, it will return None, otherwise it will return the schema.
     """
     # resolve the $ref
+    original = schema
     if "$ref" in schema:
         schema = definitions["$defs"][schema["$ref"].split("/")[-1]]
 
     if not schema or schema["properties"] == {}:
         return {"type": "null"}
-    return schema
+    return original
