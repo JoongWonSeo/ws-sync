@@ -109,7 +109,7 @@ class Synced:
             (sync_key, "serialization", serializer)
             for sync_key, serializer in serialization
         ]
-        schemas, dependencies = TypeAdapter.json_schemas(
+        schemas, definitions = TypeAdapter.json_schemas(
             schema_inputs, schema_generator=schema_generator, ref_template=ref_template
         )
 
@@ -127,14 +127,15 @@ class Synced:
         schemas[("REMOTE ACTIONS PARAMS", "validation")] = {
             "description": "Maps each action keys to its parameters",
             "properties": {
-                actions: schemas[(actions, "validation")] for actions in action_keys
+                actions: nullify_if_empty(schemas[(actions, "validation")], definitions)
+                for actions in action_keys
             },
             "required": action_keys,
             "title": f"{cls.__name__}ActionsParams",
             "type": "object",
         }
 
-        return schemas, dependencies
+        return schemas, definitions
 
     @classmethod
     def attach_to_openapi(
@@ -179,3 +180,19 @@ class SyncedAsCamelCase(Synced, is_abstract=True):
 
     def __init_subclass__(cls, *, is_abstract: bool = False, **kwargs):
         super().__init_subclass__(is_abstract=is_abstract, **kwargs)
+
+
+def nullify_if_empty(schema: dict, definitions: dict) -> dict | None:
+    """
+    A simple function that checks whether the given object schema is an empty object. If it is, it will return None, otherwise it will return the schema.
+    """
+    # resolve the $ref
+    if "$ref" in schema:
+        path = schema["$ref"].split("/")[1:]
+        schema = definitions
+        for p in path:
+            schema = schema[p]
+
+    if not schema or schema["properties"] == {}:
+        return None
+    return schema
