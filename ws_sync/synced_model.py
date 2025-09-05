@@ -182,7 +182,7 @@ class SyncedAsCamelCase(Synced, is_abstract=True):
         super().__init_subclass__(is_abstract=is_abstract, **kwargs)
 
 
-def nullify_if_empty(schema: dict, definitions: dict) -> dict | None:
+def nullify_if_empty(schema: dict, definitions: dict) -> dict:
     """
     A simple function that checks whether the given object schema is an empty object. If it is, it will return None, otherwise it will return the schema.
     """
@@ -191,5 +191,5 @@ def nullify_if_empty(schema: dict, definitions: dict) -> dict | None:
         schema = definitions["$defs"][schema["$ref"].split("/")[-1]]
 
     if not schema or schema["properties"] == {}:
-        return None
+        return {"type": "null"}
     return schema
