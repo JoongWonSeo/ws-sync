@@ -188,10 +188,7 @@ def nullify_if_empty(schema: dict, definitions: dict) -> dict | None:
     """
     # resolve the $ref
     if "$ref" in schema:
-        path = schema["$ref"].split("/")[1:]
-        schema = definitions
-        for p in path:
-            schema = schema[p]
+        schema = definitions["$defs"][schema["$ref"].split("/")[-1]]
 
     if not schema or schema["properties"] == {}:
         return None
