@@ -8,6 +8,9 @@ from ws_sync.utils.json_schema import CustomGenerateJsonSchema
 
 from .sync import Sync
 
+registered_synced_models: list[type["Synced"]] = []
+"""All non-abstract synced models that have been defined."""
+
 
 class Synced:
     """
@@ -72,6 +75,7 @@ class Synced:
             assert issubclass(cls, BaseModel), (
                 f"{cls.__name__} must inherit from BaseModel"
             )
+            registered_synced_models.append(cls)
 
     @classmethod
     def generate_validators(cls):

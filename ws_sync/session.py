@@ -7,11 +7,7 @@ from contextvars import ContextVar, Token
 from logging import Logger
 from typing import Any, Self
 
-from starlette.websockets import (  # type: ignore[reportMissingImports]
-    WebSocket,
-    WebSocketDisconnect,
-    WebSocketState,
-)
+from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 from .utils import nonblock_call
 
