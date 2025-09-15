@@ -87,7 +87,7 @@ class Synced:
     def ws_sync_json_schema(
         cls,
         *,
-        always_include_validation_schema: bool = True,
+        always_include_validation_schema: bool = False,
         schema_generator: type[GenerateJsonSchema] = GenerateJsonSchema,
         ref_template: str = "#/$defs/{model}",
     ):
@@ -145,6 +145,8 @@ class Synced:
     def attach_to_openapi(
         cls,
         openapi: dict,
+        *,
+        always_include_validation_schema: bool = False,
         schema_generator: type[GenerateJsonSchema] = CustomGenerateJsonSchema,
     ) -> dict:
         openapi = deepcopy(openapi)
@@ -153,6 +155,7 @@ class Synced:
             openapi["components"] = {"schemas": {}}
 
         schemas, definitions = cls.ws_sync_json_schema(
+            always_include_validation_schema=always_include_validation_schema,
             schema_generator=schema_generator,
             ref_template="#/components/schemas/{model}",
         )
