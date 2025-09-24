@@ -101,10 +101,14 @@ class Synced:
             cls.task_validators.items()
         )
         if always_include_validation_schema:
-            validation.append(("MODEL CREATE", TypeAdapter(cls)))
+            validation.append(
+                ("MODEL CREATE", TypeAdapter(cls))
+            )  # FIXME: this includes all fields, not just the ones that are synced!
 
         # model state serialization schema
-        serialization = [("MODEL STATE", TypeAdapter(cls))]
+        serialization = [
+            ("MODEL STATE", TypeAdapter(cls))
+        ]  # FIXME: this includes all fields, not just the ones that are synced!
 
         # merge all schemas
         schema_inputs: list = [
@@ -119,6 +123,15 @@ class Synced:
 
         # Attach helper schemas for the remote actions
         action_keys: list[str] = list(cls.action_validators)
+
+        # TODO: if the sync key is known at static time, include the sync key. How to deal with dynamic sync keys? Maybe instead of sync key it should just be an ID?
+        # # helps the frontend to know the model sync key
+        # schemas[("MODEL SYNC KEY", "validation")] = {
+        #     "description": "The sync key of the model",
+        #     "type": "string",
+        #     "enum": [class sync key here],
+        #     "title": f"{cls.__name__}SyncKey",
+        # }
 
         # helps the frontend to know the possible actions
         schemas[("REMOTE ACTIONS KEYS", "validation")] = {
@@ -138,6 +151,8 @@ class Synced:
             "title": f"{cls.__name__}ActionsParams",
             "type": "object",
         }
+
+        # TODO: also do this for tasks
 
         return schemas, definitions
 

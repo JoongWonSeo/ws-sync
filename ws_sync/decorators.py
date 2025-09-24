@@ -274,15 +274,14 @@ def find_remote_actions(cls: type) -> dict[str, Callable]:
     Returns a dictionary of action keys to the function.
     """
     actions: dict[str, Callable] = {}
-    for attr_name in dir(cls):
-        try:
-            attr = getattr(cls, attr_name)
-        except AttributeError:
+    for base in reversed(cls.__mro__):
+        if base is object:
             continue
-        if isinstance(attr, property):
-            continue
-        if callable(attr) and hasattr(attr, "remote_action"):
-            actions[attr.remote_action] = attr  # type: ignore[reportFunctionMemberAccess]
+        for attr in base.__dict__.values():
+            if isinstance(attr, property):
+                continue
+            if callable(attr) and hasattr(attr, "remote_action"):
+                actions[attr.remote_action] = attr  # type: ignore[reportFunctionMemberAccess]
     return actions
 
 
