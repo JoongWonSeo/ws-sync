@@ -3,12 +3,13 @@ import base64
 import logging
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextvars import ContextVar, Token
 from copy import deepcopy
 from inspect import Parameter, signature
 from logging import Logger
 from time import time
 from types import EllipsisType
-from typing import Any, Literal, Protocol, cast, get_type_hints
+from typing import Any, Literal, Protocol, Self, cast, get_type_hints
 
 import jsonpatch
 from pydantic import (
@@ -31,6 +32,95 @@ from ws_sync.utils import get_alias_function_for_class, nonblock_call
 from .session import session_context
 
 logger = logging.getLogger(__name__)
+
+
+# Sync Key Prefix Context
+_sync_key_prefix_stack: ContextVar[list[str] | None] = ContextVar(
+    "_sync_key_prefix_stack", default=None
+)
+"""Per-task sync key prefix stack. Allows nested prefix scopes."""
+
+
+class sync_key_scope:  # noqa: N801
+    """
+    Context manager for scoping sync keys with a prefix.
+
+    All Sync objects created within this context will have their keys prefixed.
+    Supports nesting - nested scopes will create hierarchical prefixes with '/' separator.
+
+    Example:
+        ```python
+        with sync_key_scope("user123"):
+            obj1 = MyObject()  # key: "user123/MY_KEY"
+
+            with sync_key_scope("session456"):
+                obj2 = MyObject()  # key: "user123/session456/MY_KEY"
+        ```
+
+    Args:
+        prefix: The prefix to add. Empty strings and None are ignored (no prefix added).
+    """
+
+    def __init__(self, prefix: str | None):
+        self.prefix = prefix
+        self.token: Token[list[str] | None] | None = None
+
+    def __enter__(self) -> Self:
+        # Only add non-empty prefixes
+        if self.prefix:
+            # Get current stack (creates a copy to avoid mutation issues)
+            current_stack = _sync_key_prefix_stack.get()
+            current_stack = [] if current_stack is None else current_stack.copy()
+            current_stack.append(self.prefix)
+            self.token = _sync_key_prefix_stack.set(current_stack)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object,
+    ) -> None:
+        if self.token is not None:
+            _sync_key_prefix_stack.reset(self.token)
+            self.token = None
+
+
+def get_current_sync_key_prefix() -> str | None:
+    """
+    Get the current sync key prefix from nested scopes.
+
+    Returns:
+        The full hierarchical prefix string (e.g., "abc/nested/deep"),
+        or None if no prefix scope is active.
+
+    Example:
+        ```python
+        with sync_key_scope("abc"):
+            with sync_key_scope("nested"):
+                prefix = get_current_sync_key_prefix()  # "abc/nested"
+        ```
+    """
+    stack = _sync_key_prefix_stack.get()
+    if not stack:
+        return None
+    return "/".join(stack)
+
+
+def _apply_sync_key_prefix(key: str) -> str:
+    """
+    Apply the current prefix stack to a sync key.
+
+    Args:
+        key: The base sync key.
+
+    Returns:
+        The prefixed key (e.g., "abc/nested/MY_KEY"), or the original key if no prefix is active.
+    """
+    prefix = get_current_sync_key_prefix()
+    if prefix:
+        return f"{prefix}/{key}"
+    return key
 
 
 # Event Type Helpers
@@ -199,7 +289,7 @@ class Sync:
 
         """
         self.obj = obj
-        self.key = key
+        self.key = _apply_sync_key_prefix(key)
         self.send_on_init = send_on_init
         self.casing_func = (
             get_alias_function_for_class(type(self.obj))

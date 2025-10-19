@@ -22,6 +22,9 @@ __all__ = [  # noqa: RUF022
     # globals
     "session_context",
     "get_user_session",
+    # sync key scoping
+    "sync_key_scope",
+    "get_current_sync_key_prefix",
 ]
 
 from .decorators import (
@@ -34,5 +37,5 @@ from .decorators import (
 )
 from .id import get_user_session
 from .session import Session, SessionState, session_context
-from .sync import Sync
+from .sync import Sync, get_current_sync_key_prefix, sync_key_scope
 from .synced_model import Synced, SyncedAsCamelCase
