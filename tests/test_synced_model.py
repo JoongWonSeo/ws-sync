@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError, computed_field
 
-from ws_sync.decorators import sync_all
+from ws_sync.decorators import remote_task, sync_all
 from ws_sync.sync import Sync
 from ws_sync.synced_model import Synced, SyncedAsCamelCase
 
@@ -609,3 +609,31 @@ def test_writable_computed_field_patch_generation(mock_session: Mock):
     assert last_name_patch["value"] == "Smith"
     assert full_name_patch is not None
     assert full_name_patch["value"] == "Jane Smith"
+
+
+def test_ws_sync_json_schema_includes_task_helpers():
+    """Ensure helper schemas expose remote task metadata."""
+
+    class TaskModel(Synced, BaseModel):
+        name: str
+
+        @remote_task("LONG_TASK")
+        async def long_task(self, count: int, flag: bool = False): ...  # noqa: FBT001, FBT002
+
+        @remote_task
+        async def no_params(self): ...
+
+    schemas, _definitions = TaskModel.ws_sync_json_schema()
+
+    tasks_keys_schema = schemas[("REMOTE TASKS KEYS", "validation")]
+    assert tasks_keys_schema["type"] == "string"
+    assert tasks_keys_schema["title"] == "TaskModelTasksKeys"
+    assert set(tasks_keys_schema["enum"]) == {"LONG_TASK", "no_params"}
+
+    tasks_params_schema = schemas[("REMOTE TASKS PARAMS", "validation")]
+    assert tasks_params_schema["type"] == "object"
+    assert tasks_params_schema["title"] == "TaskModelTasksParams"
+    assert set(tasks_params_schema["properties"]) == {"LONG_TASK", "no_params"}
+    assert set(tasks_params_schema["required"]) == {"LONG_TASK", "no_params"}
+    assert tasks_params_schema["properties"]["no_params"] == {"type": "null"}
+    assert tasks_params_schema["properties"]["LONG_TASK"] != {"type": "null"}

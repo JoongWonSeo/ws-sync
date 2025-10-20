@@ -152,7 +152,23 @@ class Synced:
             "type": "object",
         }
 
-        # TODO: also do this for tasks
+        task_keys: list[str] = list(cls.task_validators)
+        schemas[("REMOTE TASKS KEYS", "validation")] = {
+            "description": "Lists all task keys as enum values",
+            "type": "string",
+            "enum": task_keys,
+            "title": f"{cls.__name__}TasksKeys",
+        }
+        schemas[("REMOTE TASKS PARAMS", "validation")] = {
+            "description": "Maps each task key to its parameters",
+            "properties": {
+                task: nullify_if_empty(schemas[(task, "validation")], definitions)
+                for task in task_keys
+            },
+            "required": task_keys,
+            "title": f"{cls.__name__}TasksParams",
+            "type": "object",
+        }
 
         return schemas, definitions
 
