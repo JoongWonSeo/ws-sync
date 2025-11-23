@@ -129,47 +129,10 @@ class Synced:
             )
 
             # Create a custom adapter that only includes the synced fields
-            # We can't easily create a partial TypeAdapter, but we can filter the schema later
-            # Or we can create a dynamic Pydantic model with only these fields.
-            # For now, let's just assume TypeAdapter(cls) and then we rely on the fact
-            # that we can inspect the fields.
-            # Actually, better: create a subset model.
-
-            # NOTE: Creating a subset model might lose some metadata or validators
-            # if not careful. But for schema generation of the *state*, it might be fine.
-            # However, simpler approach: standard TypeAdapter, but maybe we don't need to filter
-            # deeply?
-
-            # Let's stick to TypeAdapter(cls) but try to use the field mask?
-            # No, TypeAdapter doesn't support field mask for schema generation.
-
-            # So we build a dynamic model with only synced fields.
-
             field_definitions = {}
             for name, field_info in cls.model_fields.items():
                 if name in synced_attrs:
                     field_definitions[name] = (field_info.annotation, field_info)
-
-            # Add computed fields
-            # create_model doesn't easily support computed_fields directly in args
-            # before v2.something. But we can add them to the class.
-
-            # Alternative: use include/exclude in json_schema_extra? No.
-
-            # Let's rely on `Sync.build_field_validators` which we already have?
-            # `cls.field_validators` contains adapters for individual fields.
-            # But we want the schema for the *Model*.
-
-            # Let's try to construct the schema manually from field validators?
-            # Or just use TypeAdapter(cls) and live with it for now?
-            # The user explicitly asked to fix "creating field validators and json schemas for fields that are NOT actually meant to be synced".
-
-            # Let's assume we can just pass the TypeAdapter(cls) for now, but ideally we should filter.
-            # Wait, the issue is that `Synced.ws_sync_json_schema` returns a schema for "MODEL STATE".
-            # If we pass `TypeAdapter(cls)`, it includes ALL fields.
-
-            # If we have `synced_attrs`, we can build a dynamic model `SyncedState`
-            # that only has these fields.
 
             fields = {}
             for attr_name in synced_attrs:
@@ -188,7 +151,7 @@ class Synced:
 
             # Create a new model just for schema generation
             schema_model = create_model(
-                f"{cls.__name__}State", **fields, __config__=cls.model_config
+                f"{cls.__name__}", **fields, __config__=cls.model_config
             )
             serialization_adapter = TypeAdapter(schema_model)
 
