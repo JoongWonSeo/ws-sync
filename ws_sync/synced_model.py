@@ -1,6 +1,13 @@
 from copy import deepcopy
 
-from pydantic import AliasGenerator, BaseModel, ConfigDict, PrivateAttr, TypeAdapter
+from pydantic import (
+    AliasGenerator,
+    BaseModel,
+    ConfigDict,
+    PrivateAttr,
+    TypeAdapter,
+    create_model,
+)
 from pydantic.alias_generators import to_camel
 from pydantic.json_schema import GenerateJsonSchema
 
@@ -106,9 +113,86 @@ class Synced:
             )  # FIXME: this includes all fields, not just the ones that are synced!
 
         # model state serialization schema
-        serialization = [
-            ("MODEL STATE", TypeAdapter(cls))
-        ]  # FIXME: this includes all fields, not just the ones that are synced!
+        serialization_adapter = TypeAdapter(cls)
+
+        if sync_config := getattr(cls, "_sync_config", None):
+            from ws_sync.utils import get_alias_function_for_class  # noqa: PLC0415
+
+            # Resolve attributes using the static config
+            casing_func = get_alias_function_for_class(cls)
+            synced_attrs = Sync.resolve_attributes(
+                obj_or_cls=cls,
+                include=sync_config.get("include"),
+                exclude=sync_config.get("exclude"),
+                sync_all=sync_config.get("sync_all", False),
+                casing_func=casing_func,
+            )
+
+            # Create a custom adapter that only includes the synced fields
+            # We can't easily create a partial TypeAdapter, but we can filter the schema later
+            # Or we can create a dynamic Pydantic model with only these fields.
+            # For now, let's just assume TypeAdapter(cls) and then we rely on the fact
+            # that we can inspect the fields.
+            # Actually, better: create a subset model.
+
+            # NOTE: Creating a subset model might lose some metadata or validators
+            # if not careful. But for schema generation of the *state*, it might be fine.
+            # However, simpler approach: standard TypeAdapter, but maybe we don't need to filter
+            # deeply?
+
+            # Let's stick to TypeAdapter(cls) but try to use the field mask?
+            # No, TypeAdapter doesn't support field mask for schema generation.
+
+            # So we build a dynamic model with only synced fields.
+
+            field_definitions = {}
+            for name, field_info in cls.model_fields.items():
+                if name in synced_attrs:
+                    field_definitions[name] = (field_info.annotation, field_info)
+
+            # Add computed fields
+            # create_model doesn't easily support computed_fields directly in args
+            # before v2.something. But we can add them to the class.
+
+            # Alternative: use include/exclude in json_schema_extra? No.
+
+            # Let's rely on `Sync.build_field_validators` which we already have?
+            # `cls.field_validators` contains adapters for individual fields.
+            # But we want the schema for the *Model*.
+
+            # Let's try to construct the schema manually from field validators?
+            # Or just use TypeAdapter(cls) and live with it for now?
+            # The user explicitly asked to fix "creating field validators and json schemas for fields that are NOT actually meant to be synced".
+
+            # Let's assume we can just pass the TypeAdapter(cls) for now, but ideally we should filter.
+            # Wait, the issue is that `Synced.ws_sync_json_schema` returns a schema for "MODEL STATE".
+            # If we pass `TypeAdapter(cls)`, it includes ALL fields.
+
+            # If we have `synced_attrs`, we can build a dynamic model `SyncedState`
+            # that only has these fields.
+
+            fields = {}
+            for attr_name in synced_attrs:
+                if attr_name in cls.model_fields:
+                    fields[attr_name] = (
+                        cls.model_fields[attr_name].annotation,
+                        cls.model_fields[attr_name],
+                    )
+                elif attr_name in cls.model_computed_fields:
+                    # Computed fields are trickier to add to create_model dynamically to appear as fields
+                    # For schema generation purposes, we can treat them as read-only fields
+                    fields[attr_name] = (
+                        cls.model_computed_fields[attr_name].return_type,
+                        ...,
+                    )
+
+            # Create a new model just for schema generation
+            schema_model = create_model(
+                f"{cls.__name__}State", **fields, __config__=cls.model_config
+            )
+            serialization_adapter = TypeAdapter(schema_model)
+
+        serialization = [("MODEL STATE", serialization_adapter)]
 
         # merge all schemas
         schema_inputs: list = [

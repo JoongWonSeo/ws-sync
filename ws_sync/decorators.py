@@ -83,13 +83,13 @@ class Calendar:
     @remote_action("IMPORT_EVENTS")
     async def import_events(self, data: bytes):  # from `sendBinary` in the frontend
         pickle.loads(data)  # do something with the data
-```
+    ```
 """
 
 from collections.abc import Callable
 from logging import Logger
 from types import EllipsisType
-from typing import overload
+from typing import cast, overload
 
 
 @overload  # Usage without parentheses
@@ -124,7 +124,7 @@ def sync[F: Callable](
     logger: Logger | None = None,
 ) -> F | Callable[[F], F]:
     """
-    Decorator for `__init__()`: Register the attributes that should be synced with the frontend.
+    Decorator for `__init__()` or Class: Register the attributes that should be synced with the frontend.
 
     Args:
         func: implicitly passed when used as a decorator
@@ -140,7 +140,45 @@ def sync[F: Callable](
     """
     from .sync import Sync  # noqa: PLC0415
 
-    def decorator(init_func: F) -> F:
+    def _process_class(cls: type) -> type:
+        # Store configuration on the class
+        cls._sync_config = {
+            "key": key,
+            "sync_all": sync_all,
+            "include": include,
+            "exclude": exclude,
+            "toCamelCase": toCamelCase,
+            "send_on_init": send_on_init,
+            "expose_running_tasks": expose_running_tasks,
+            "logger": logger,
+        }
+
+        # We wrap __init__ to ensure Sync is initialized after the object is fully initialized.
+        # This works for both standard classes and Pydantic models (where __init__ might call model_post_init).
+        original_init = cls.__init__
+
+        def init_wrapper(self, *args, **kwargs):  # noqa: ANN001
+            original_init(self, *args, **kwargs)
+
+            # Instantiate Sync
+            sync_key = key if isinstance(key, str) else type(self).__name__
+
+            self.sync = Sync(
+                obj=self,
+                key=sync_key,
+                sync_all=sync_all,
+                include=include,
+                exclude=exclude or [],
+                toCamelCase=toCamelCase,
+                send_on_init=send_on_init,
+                expose_running_tasks=expose_running_tasks,
+                logger=logger,
+            )
+
+        cls.__init__ = init_wrapper
+        return cls
+
+    def _process_init(init_func: F) -> F:
         def wrapper(self, *args, **kwargs):  # noqa: ANN001
             init_func(self, *args, **kwargs)
 
@@ -159,6 +197,11 @@ def sync[F: Callable](
             )
 
         return wrapper  # type: ignore
+
+    def decorator(target: F) -> F:
+        if isinstance(target, type):
+            return cast(F, _process_class(target))
+        return _process_init(target)
 
     if func is None:  # @sync without parentheses
         return decorator

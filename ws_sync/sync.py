@@ -248,6 +248,81 @@ class Sync:
             task_cancels=_task_cancels,
         )
 
+    @staticmethod
+    def resolve_attributes(
+        obj_or_cls: object | type,
+        *,
+        include: dict[str, str | EllipsisType] | None = None,
+        exclude: list[str] | None = None,
+        sync_all: bool = False,
+        casing_func: Callable[[str], str] | None = None,
+    ) -> dict[str, str]:
+        """
+        Resolve which attributes to sync based on configuration.
+
+        Returns:
+            Dict mapping attribute name to sync key (alias).
+        """
+        include = include or {}
+        exclude = exclude or []
+        sync_attributes: dict[str, str] = {}
+
+        is_class = isinstance(obj_or_cls, type)
+        cls = obj_or_cls if is_class else type(obj_or_cls)
+
+        def casing(attr: str) -> str:
+            return casing_func(attr) if casing_func else attr
+
+        # observe all non-private attributes
+        if sync_all:
+            if issubclass(cls, BaseModel):
+                # Include regular fields
+                for field in cls.model_fields:
+                    if field in exclude:
+                        continue
+                    sync_attributes[field] = casing(field)
+
+                # Include computed fields
+                for field in cls.model_computed_fields:
+                    if field in exclude:
+                        continue
+                    sync_attributes[field] = casing(field)
+            # For regular classes, we need an instance to check dir() reliably for instance attrs,
+            # but we can check class attrs if we only have a class.
+            # However, if we only have a class, we can't know instance attributes that are set in __init__.
+            # So sync_all=True for plain classes really works best with an instance.
+            # If we have a class, we can only guess based on annotations or class attributes.
+            elif is_class:
+                # Best effort for static analysis of plain classes
+                # We can check type hints
+                for attr_name in get_type_hints(cls):
+                    if attr_name in exclude or attr_name.startswith("_"):
+                        continue
+                    sync_attributes[attr_name] = casing(attr_name)
+            else:
+                for attr_name in dir(obj_or_cls):
+                    try:
+                        attr = getattr(obj_or_cls, attr_name)
+                    except AttributeError:
+                        continue
+                    if (
+                        attr_name in exclude
+                        or attr_name.startswith("_")
+                        or callable(attr)
+                        or isinstance(attr, Sync)
+                    ):
+                        continue
+
+                    sync_attributes[attr_name] = casing(attr_name)
+
+        # observe specific attributes
+        for attr_name, sync_key in include.items():
+            sync_attributes[attr_name] = (
+                casing(attr_name) if sync_key is ... else cast(str, sync_key)
+            )
+
+        return sync_attributes
+
     def __init__(
         self,
         obj: object,
