@@ -160,6 +160,15 @@ def sync[F: Callable](
         def init_wrapper(self, *args, **kwargs):  # noqa: ANN001
             original_init(self, *args, **kwargs)
 
+            # Check if the subclass has a different sync configuration
+            if (
+                type(self) is not cls
+                and getattr(type(self), "_sync_config", None) is not cls._sync_config
+            ):
+                # The subclass has overridden the sync configuration,
+                # so we shouldn't instantiate Sync here.
+                return
+
             # Instantiate Sync
             sync_key = key if isinstance(key, str) else type(self).__name__
 
