@@ -70,7 +70,7 @@ class Synced:
     def sync(self, value: Sync):
         self._sync = value
 
-    def model_post_init(self, context: Any):
+    def model_post_init(self, context: Any, /):
         """
         Called after model initialization.
 
