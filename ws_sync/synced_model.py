@@ -1,4 +1,5 @@
 from copy import deepcopy
+from typing import Any
 
 from pydantic import (
     AliasGenerator,
@@ -68,6 +69,14 @@ class Synced:
     @sync.setter
     def sync(self, value: Sync):
         self._sync = value
+
+    def model_post_init(self, context: Any):
+        """
+        Called after model initialization.
+
+        Empty by default - decorators will override this to call user's model_post_init
+        then initialize Sync.
+        """
 
     # ===== Class-level validator creation ===== #
     def __init_subclass__(cls, *, is_abstract: bool = False, **kwargs):

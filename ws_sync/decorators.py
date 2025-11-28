@@ -138,11 +138,23 @@ def sync[F: Callable](
         expose_running_tasks: expose the list in the synced state as `running_tasks` or `runningTasks`
         logger: logger to use for logging
     """
+    from pydantic import BaseModel  # noqa: PLC0415
+
     from .sync import Sync  # noqa: PLC0415
+    from .synced_model import Synced  # noqa: PLC0415
 
     def _process_class(cls: type) -> type:
+        # For Pydantic models, require Synced mixin
+        if issubclass(cls, BaseModel) and not issubclass(cls, Synced):
+            msg = (
+                f"Pydantic model {cls.__name__} with @sync_all() or @sync_only() decorator "
+                "must inherit from ws_sync.Synced mixin.\n"
+                f"Change: class {cls.__name__}(BaseModel) -> class {cls.__name__}(Synced, BaseModel)"
+            )
+            raise TypeError(msg)
+
         # Store configuration on the class
-        cls._sync_config = {
+        cls._sync_config = {  # type: ignore
             "key": key,
             "sync_all": sync_all,
             "include": include,
@@ -153,17 +165,12 @@ def sync[F: Callable](
             "logger": logger,
         }
 
-        # We wrap __init__ to ensure Sync is initialized after the object is fully initialized.
-        # This works for both standard classes and Pydantic models (where __init__ might call model_post_init).
-        original_init = cls.__init__
-
-        def init_wrapper(self, *args, **kwargs):  # noqa: ANN001
-            original_init(self, *args, **kwargs)
-
+        def _initialize_sync(self):  # noqa: ANN001
+            """Initialize Sync object. Called from __init__ wrapper or model_post_init."""
             # Check if the subclass has a different sync configuration
             if (
                 type(self) is not cls
-                and getattr(type(self), "_sync_config", None) is not cls._sync_config
+                and getattr(type(self), "_sync_config", None) is not cls._sync_config  # type: ignore
             ):
                 # The subclass has overridden the sync configuration,
                 # so we shouldn't instantiate Sync here.
@@ -172,7 +179,7 @@ def sync[F: Callable](
             # Instantiate Sync
             sync_key = key if isinstance(key, str) else type(self).__name__
 
-            self.sync = Sync(
+            sync_obj = Sync(
                 obj=self,
                 key=sync_key,
                 sync_all=sync_all,
@@ -184,7 +191,41 @@ def sync[F: Callable](
                 logger=logger,
             )
 
-        cls.__init__ = init_wrapper
+            # Set sync object (Synced mixin has the property and _sync private attr)
+            self.sync = sync_obj
+
+        # For Pydantic models, override model_post_init to call user's version then init Sync
+        # This ensures Sync is initialized AFTER all user model_post_init logic runs
+        # This works for ALL construction paths: __init__(), model_validate(), model_construct(), etc.
+        if issubclass(cls, BaseModel):
+            # Get user's model_post_init if they defined one
+            user_model_post_init = cls.__dict__.get("model_post_init")
+
+            # Get Synced's model_post_init (the base implementation)
+            synced_model_post_init = Synced.model_post_init  # type: ignore
+
+            def wrapped_model_post_init(self, __context, /):  # noqa: ANN001
+                # First, call user's model_post_init if they defined one
+                if user_model_post_init is not None:
+                    user_model_post_init(self, __context)
+                else:
+                    # Call Synced's default (empty) model_post_init
+                    synced_model_post_init(self, __context)
+
+                # Finally, initialize Sync AFTER all user initialization is complete
+                _initialize_sync(self)
+
+            cls.model_post_init = wrapped_model_post_init  # type: ignore
+        else:
+            # For regular classes, wrap __init__
+            original_init = cls.__init__
+
+            def init_wrapper(self, *args, **kwargs):  # noqa: ANN001
+                original_init(self, *args, **kwargs)
+                _initialize_sync(self)
+
+            cls.__init__ = init_wrapper
+
         return cls
 
     def _process_init(init_func: F) -> F:
