@@ -12,7 +12,7 @@ from .utils import Company, Team, User
 
 
 @pytest.fixture
-def mock_session() -> Mock:
+def mock_session():
     """Create a mock session for testing"""
     session = Mock(spec=Session)
     session.send = AsyncMock()
@@ -21,8 +21,9 @@ def mock_session() -> Mock:
     session.deregister_event = Mock()
     session.is_connected = True
 
-    session_context.set(session)
-    return session
+    token = session_context.set(session)
+    yield session
+    session_context.reset(token)
 
 
 @pytest.fixture
