@@ -2,7 +2,9 @@ import asyncio
 import base64
 import logging
 import warnings
+import weakref
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextlib import suppress
 from contextvars import ContextVar, Token
 from copy import deepcopy
 from inspect import Parameter, signature
@@ -488,6 +490,12 @@ class Sync:
         # the snapshot is the exact state that the frontend has, for patching
         self.state_snapshot: dict[str, Any] = self._snapshot()
         self._last_sync: float | None = None  # timestamp of last sync
+
+        # ========== Weak Reference Cleanup State ========== #
+        self._closed = False
+        self._init_wrapper: Callable[..., Any] | None = None
+        self._registered_handlers: dict[str, Callable[..., Any]] = {}
+        self._weak_self_ref: weakref.ref[Sync] | None = None
         self._register_event_handlers()
 
     # ========== High-Level: Sync and Actions ========== #
@@ -616,30 +624,169 @@ class Sync:
 
     # ========== Low-Level: Register Event Callbacks ========== #
     def _register_event_handlers(self):
-        self.session.register_event(get_event(self.key), self._send_state)
-        self.session.register_event(set_event(self.key), self._set_state)
-        self.session.register_event(patch_event(self.key), self._patch_state)
-        if self.send_on_init:
-            self.session.register_init(self._send_state)
+        """
+        Register event handlers with the session using weak references.
+
+        This allows the Sync object (and its target object) to be garbage collected
+        when no longer referenced, automatically cleaning up the handlers.
+        """
+        # Capture values needed for cleanup callback (avoid capturing 'self')
+        session = self.session
+        key = self.key
+        send_on_init = self.send_on_init
+
+        # Create weak reference to self for use in wrappers
+        weak_self: weakref.ref[Sync] = weakref.ref(self)
+
+        # Factory to create async wrappers that check if Sync is still alive
+        def make_method_wrapper(method_name: str):
+            async def wrapper(data: Any = None) -> None:
+                sync = weak_self()
+                if sync is None:
+                    return  # Sync was garbage collected
+                method = getattr(sync, method_name)
+                if data is not None:
+                    await method(data)
+                else:
+                    await method()
+
+            return wrapper
+
+        # Create wrappers for the core state handlers
+        send_state_wrapper = make_method_wrapper("_send_state")
+        set_state_wrapper = make_method_wrapper("_set_state")
+        patch_state_wrapper = make_method_wrapper("_patch_state")
+
+        # Create wrappers for action/task handlers if they exist
+        actions_wrapper = None
         if self.actions:
-            self.session.register_event(action_event(self.key), self.actions)
+            original_actions = self.actions
+
+            async def _actions_wrapper(data: Any):
+                sync = weak_self()
+                if sync is None:
+                    return
+                await original_actions(data)
+
+            actions_wrapper = _actions_wrapper
+
+        tasks_wrapper = None
         if self.tasks:
-            self.session.register_event(task_start_event(self.key), self.tasks)
+            original_tasks = self.tasks
+
+            async def _tasks_wrapper(data: Any):
+                sync = weak_self()
+                if sync is None:
+                    return
+                await original_tasks(data)
+
+            tasks_wrapper = _tasks_wrapper
+
+        task_cancels_wrapper = None
         if self.task_cancels:
-            self.session.register_event(task_cancel_event(self.key), self.task_cancels)
+            original_task_cancels = self.task_cancels
+
+            async def _task_cancels_wrapper(data: Any):
+                sync = weak_self()
+                if sync is None:
+                    return
+                await original_task_cancels(data)
+
+            task_cancels_wrapper = _task_cancels_wrapper
+
+        # Register handlers with session
+        session.register_event(get_event(key), send_state_wrapper)
+        session.register_event(set_event(key), set_state_wrapper)
+        session.register_event(patch_event(key), patch_state_wrapper)
+
+        if send_on_init:
+            session.register_init(send_state_wrapper)
+
+        if actions_wrapper:
+            session.register_event(action_event(key), actions_wrapper)
+
+        if tasks_wrapper:
+            session.register_event(task_start_event(key), tasks_wrapper)
+
+        if task_cancels_wrapper:
+            session.register_event(task_cancel_event(key), task_cancels_wrapper)
+
+        # Store wrapper references for cleanup - we need to check identity before removing
+        # to avoid removing handlers that were overwritten by a newer Sync with same key
+        registered_handlers: dict[str, Callable[..., Any]] = {
+            get_event(key): send_state_wrapper,
+            set_event(key): set_state_wrapper,
+            patch_event(key): patch_state_wrapper,
+        }
+        if actions_wrapper:
+            registered_handlers[action_event(key)] = actions_wrapper
+        if tasks_wrapper:
+            registered_handlers[task_start_event(key)] = tasks_wrapper
+        if task_cancels_wrapper:
+            registered_handlers[task_cancel_event(key)] = task_cancels_wrapper
+
+        init_wrapper_to_remove = send_state_wrapper if send_on_init else None
+
+        # Create cleanup callback that runs when Sync is garbage collected
+        # This callback must NOT capture 'self' - only the variables above
+        def _weak_cleanup_callback(_dead_ref: weakref.ref[Sync]):
+            # Handle mock sessions gracefully (used in tests)
+            if not hasattr(session, "event_handlers"):
+                return
+
+            # Only deregister handlers if they're still ours (not overwritten by newer Sync)
+            for event_key, our_handler in registered_handlers.items():
+                current_handler = session.event_handlers.get(event_key)
+                if current_handler is our_handler:
+                    session.deregister_event(event_key)
+
+            # Remove from init_handlers list if applicable
+            if init_wrapper_to_remove is not None:
+                with suppress(ValueError):
+                    session.init_handlers.remove(init_wrapper_to_remove)
+
+        # Store the weak reference with cleanup callback
+        # This ref must be stored to prevent immediate GC of the ref object itself
+        self._weak_self_ref = weakref.ref(self, _weak_cleanup_callback)
+
+        # Store references for manual deregistration via close()
+        self._init_wrapper = init_wrapper_to_remove
+        self._registered_handlers = registered_handlers
+        self._closed = False
 
     def _deregister(self):
-        self.session.deregister_event(get_event(self.key))
-        self.session.deregister_event(set_event(self.key))
-        self.session.deregister_event(patch_event(self.key))
-        if self.send_on_init:
-            self.session.init_handlers.remove(self._send_state)
-        if self.actions:
-            self.session.deregister_event(action_event(self.key))
-        if self.tasks:
-            self.session.deregister_event(task_start_event(self.key))
-        if self.task_cancels:
-            self.session.deregister_event(task_cancel_event(self.key))
+        """
+        Remove all event handlers from the session.
+
+        This is called automatically when the Sync is garbage collected,
+        but can also be called manually via close() for immediate cleanup.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        # Only deregister handlers if they're still ours (not overwritten by newer Sync)
+        for event_key, our_handler in self._registered_handlers.items():
+            current_handler = self.session.event_handlers.get(event_key)
+            if current_handler is our_handler:
+                self.session.deregister_event(event_key)
+
+        # Remove from init_handlers list if applicable
+        if self._init_wrapper is not None:
+            with suppress(ValueError):
+                self.session.init_handlers.remove(self._init_wrapper)
+
+    def close(self):
+        """
+        Explicitly close this Sync and deregister all handlers.
+
+        Call this when you're done with a Sync object to immediately release
+        resources. If not called, cleanup happens automatically when the
+        Sync is garbage collected.
+
+        This is idempotent - calling it multiple times is safe.
+        """
+        self._deregister()
 
     async def _send_state(self, _: Any = None):
         self.state_snapshot = self._snapshot()
@@ -728,11 +875,20 @@ class Sync:
         obj: object,
         handlers: Mapping[str, Callable[..., Any]],
     ) -> Callable[[dict[str, Any]], Awaitable[None]]:
+        # Use weakrefs to avoid preventing GC of self and obj
+        weak_self: weakref.ref[Sync] = weakref.ref(self)
+        weak_obj: weakref.ref[object] = weakref.ref(obj)
+
         async def _handle_action(action: dict):
+            sync = weak_self()
+            target = weak_obj()
+            if sync is None or target is None:
+                return  # Already garbage collected
+
             action_type = action.pop("type")
             if handler := handlers.get(action_type):
                 # Validate action parameters, including converting to python
-                if validator := self.action_validators.get(action_type):
+                if validator := sync.action_validators.get(action_type):
                     validated = validator.validate_python(action)
                     if isinstance(validated, BaseModel):
                         # Extract native Python objects (BaseModel/dataclass/etc.)
@@ -748,7 +904,7 @@ class Sync:
                 # Call the underlying action handler
                 if getattr(handler, "__self__", None) is None:
                     await nonblock_call(
-                        handler, obj, **kwargs
+                        handler, target, **kwargs
                     )  # handler is unbound to an instance
                 else:
                     await nonblock_call(
@@ -768,29 +924,40 @@ class Sync:
         Callable[[dict[str, Any]], Awaitable[None]],
         Callable[[dict[str, Any]], Awaitable[None]],
     ]:
+        # Use weakrefs to avoid preventing GC of self and obj
+        weak_self: weakref.ref[Sync] = weakref.ref(self)
+        weak_obj: weakref.ref[object] = weakref.ref(obj)
+
         async def _run_and_pop(task: Awaitable, task_type: str):
+            sync = weak_self()
             try:
                 await task
             except asyncio.CancelledError:
-                if self.logger:
-                    self.logger.info("Task %s cancelled", task_type)
+                if sync and sync.logger:
+                    sync.logger.info("Task %s cancelled", task_type)
                 if on_cancel and task_type in on_cancel:
                     await on_cancel[task_type]()
                 raise
             finally:
-                self.running_tasks.pop(task_type, None)
-                if self.task_exposure:
-                    await self.sync()
+                if sync:
+                    sync.running_tasks.pop(task_type, None)
+                    if sync.task_exposure:
+                        await sync.sync()
 
         async def _create_task(task_args: dict):
+            sync = weak_self()
+            target = weak_obj()
+            if sync is None or target is None:
+                return  # Already garbage collected
+
             task_type = task_args.pop("type")
             if factory := factories.get(task_type):
-                if task_type in self.running_tasks:
-                    if self.logger:
-                        self.logger.warning("Task %s already running", task_type)
+                if task_type in sync.running_tasks:
+                    if sync.logger:
+                        sync.logger.warning("Task %s already running", task_type)
                     return
 
-                if validator := self.task_validators.get(task_type):
+                if validator := sync.task_validators.get(task_type):
                     validated = validator.validate_python(task_args)
                     if isinstance(validated, BaseModel):
                         # Extract native Python objects (BaseModel/dataclass/etc.)
@@ -806,7 +973,7 @@ class Sync:
                 # Create the task
                 if getattr(factory, "__self__", None) is None:
                     todo = nonblock_call(
-                        factory, obj, **kwargs
+                        factory, target, **kwargs
                     )  # factory is unbound to an instance
                 else:
                     todo = nonblock_call(
@@ -814,18 +981,22 @@ class Sync:
                     )  # factory is bound to an instance
 
                 task = asyncio.create_task(_run_and_pop(todo, task_type))
-                self.running_tasks[task_type] = task
-                if self.task_exposure:
-                    await self.sync()
+                sync.running_tasks[task_type] = task
+                if sync.task_exposure:
+                    await sync.sync()
             else:
                 warnings.warn(f"No factory for task {task_type}", stacklevel=1)
 
         async def _cancel_task(task_args: dict):
+            sync = weak_self()
+            if sync is None:
+                return  # Already garbage collected
+
             task_type = task_args.pop("type")
-            if running_task := self.running_tasks.get(task_type):
+            if running_task := sync.running_tasks.get(task_type):
                 running_task.cancel()
-            elif self.logger:
-                self.logger.warning("Task %s not running", task_type)
+            elif sync.logger:
+                sync.logger.warning("Task %s not running", task_type)
 
         return _create_task, _cancel_task
 

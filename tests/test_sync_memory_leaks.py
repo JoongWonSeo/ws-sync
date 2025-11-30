@@ -32,23 +32,20 @@ class TestEventHandlerAccumulation:
 
     def test_dynamic_keys_accumulate_handlers(self, real_session: Session):
         """
-        Test that creating Sync objects with dynamic keys accumulates event handlers.
-
-        This test exposes the memory leak where each new dynamic key adds handlers
-        that are never cleaned up.
+        Test that creating Sync objects with dynamic keys accumulates event handlers,
+        and that they are cleaned up when the Sync objects are garbage collected.
         """
         initial_handler_count = len(real_session.event_handlers)
 
+        class DynamicObj:
+            value: int = 0
+
         # Create multiple Sync objects with dynamic keys
+        # NOTE: We append directly to avoid loop variables keeping the last object alive
+        # (Python loop variables persist after the loop ends, preventing GC)
         syncs = []
         for i in range(10):
-
-            class DynamicObj:
-                value: int = 0
-
-            obj = DynamicObj()
-            sync = Sync.all(obj, f"DYNAMIC_KEY_{i}", send_on_init=False)
-            syncs.append(sync)
+            syncs.append(Sync.all(DynamicObj(), f"DYNAMIC_KEY_{i}", send_on_init=False))  # noqa: PERF401
 
         # Each Sync registers 6 handlers: get, set, patch, action, task_start, task_cancel
         handlers_per_sync = 6
@@ -59,7 +56,6 @@ class TestEventHandlerAccumulation:
         del syncs
         gc.collect()
 
-        # THIS TEST WILL FAIL with current implementation - handlers are NOT cleaned up
         assert len(real_session.event_handlers) == initial_handler_count, (
             f"Expected handlers to be cleaned up after Sync deletion. "
             f"Initial: {initial_handler_count}, Current: {len(real_session.event_handlers)}"
@@ -102,7 +98,6 @@ class TestEventHandlerAccumulation:
         del sync1, sync2, sync3
         gc.collect()
 
-        # THIS WILL FAIL - handlers are not cleaned up
         assert len(real_session.event_handlers) == initial_count
 
 
@@ -111,23 +106,20 @@ class TestInitHandlerAccumulation:
 
     def test_init_handlers_accumulate_with_dynamic_keys(self, real_session: Session):
         """
-        Test that init handlers accumulate when creating Sync objects with dynamic keys.
-
-        Unlike event handlers which use a dict (so same key overwrites), init_handlers
-        is a list that grows unbounded.
+        Test that init handlers accumulate when creating Sync objects with dynamic keys,
+        and that they are cleaned up when the Sync objects are garbage collected.
         """
         initial_init_handler_count = len(real_session.init_handlers)
 
+        class DynamicObj:
+            value: int = 0
+
         # Create multiple Sync objects with different keys, all with send_on_init=True
+        # NOTE: We append directly to avoid loop variables keeping the last object alive
+        # (Python loop variables persist after the loop ends, preventing GC)
         syncs = []
         for i in range(10):
-
-            class DynamicObj:
-                value: int = 0
-
-            obj = DynamicObj()
-            sync = Sync.all(obj, f"INIT_KEY_{i}", send_on_init=True)
-            syncs.append(sync)
+            syncs.append(Sync.all(DynamicObj(), f"INIT_KEY_{i}", send_on_init=True))  # noqa: PERF401
 
         # Each Sync with send_on_init=True adds 1 init handler
         assert len(real_session.init_handlers) == initial_init_handler_count + 10
@@ -136,7 +128,6 @@ class TestInitHandlerAccumulation:
         del syncs
         gc.collect()
 
-        # THIS WILL FAIL - init handlers are NOT cleaned up
         assert len(real_session.init_handlers) == initial_init_handler_count, (
             f"Expected init handlers to be cleaned up. "
             f"Initial: {initial_init_handler_count}, Current: {len(real_session.init_handlers)}"
@@ -216,7 +207,7 @@ class TestObjectGarbageCollection:
 
         obj = DecoratedClass()
         obj_ref = weakref.ref(obj)
-        sync_ref = weakref.ref(obj.sync)
+        sync_ref = weakref.ref(obj.sync)  # type: ignore
 
         del obj
         gc.collect()
@@ -228,6 +219,56 @@ class TestObjectGarbageCollection:
         assert sync_ref() is None, (
             "Sync attribute should be garbage collected with its parent"
         )
+
+
+class TestCloseMethod:
+    """Tests for the public close() method."""
+
+    def test_close_immediately_removes_handlers(self, real_session: Session):
+        """
+        Test that calling close() immediately removes all handlers,
+        without waiting for garbage collection.
+        """
+        initial_event_count = len(real_session.event_handlers)
+        initial_init_count = len(real_session.init_handlers)
+        handlers_per_sync = 6
+
+        class SimpleObj:
+            value: int = 0
+
+        obj = SimpleObj()
+        sync = Sync.all(obj, "CLOSE_TEST", send_on_init=True)
+
+        # Verify handlers were added
+        assert (
+            len(real_session.event_handlers) == initial_event_count + handlers_per_sync
+        )
+        assert len(real_session.init_handlers) == initial_init_count + 1
+
+        # Close should immediately remove handlers
+        sync.close()
+
+        assert len(real_session.event_handlers) == initial_event_count
+        assert len(real_session.init_handlers) == initial_init_count
+
+    def test_close_is_idempotent(self, real_session: Session):
+        """
+        Test that calling close() multiple times is safe.
+        """
+        initial_count = len(real_session.event_handlers)
+
+        class SimpleObj:
+            value: int = 0
+
+        obj = SimpleObj()
+        sync = Sync.all(obj, "IDEMPOTENT_TEST", send_on_init=False)
+
+        # Close multiple times - should not raise
+        sync.close()
+        sync.close()
+        sync.close()
+
+        assert len(real_session.event_handlers) == initial_count
 
 
 class TestDeregisterBehavior:
@@ -286,7 +327,6 @@ class TestDeregisterBehavior:
         )
 
         # Should have: 3 base handlers + 1 action + 1 task_start + 1 task_cancel
-        3 + 1 + 1 + 1
         assert (
             len(real_session.event_handlers) >= initial_count + 3
         )  # At least base handlers
@@ -343,16 +383,16 @@ class TestLongLivedSessionWithDynamicSyncs:
 
     def test_handler_count_stays_bounded_with_reused_keys(self, real_session: Session):
         """
-        Test that with reused keys, at least event handlers stay bounded
-        (though init handlers may still leak).
+        Test that with reused keys, event handlers stay bounded.
+        Each Sync overwrites the previous one's handlers, and when collected,
+        the cleanup removes handlers (since they match the registered ones).
         """
         initial_event_count = len(real_session.event_handlers)
-        handlers_per_sync = 6  # get, set, patch, action, task_start, task_cancel
 
         class SimpleObj:
             value: int = 0
 
-        # Reuse the same key 100 times
+        # Reuse the same key 100 times, explicitly deleting each time
         for _i in range(100):
             obj = SimpleObj()
             sync = Sync.all(obj, "REUSED_KEY", send_on_init=False)
@@ -360,14 +400,13 @@ class TestLongLivedSessionWithDynamicSyncs:
             del obj
             gc.collect()
 
-        # With same key, event handlers should NOT accumulate (dict overwrites)
-        # But the old handlers are still in the dict until overwritten
+        # Each iteration: create Sync -> delete -> gc collects and cleans up
+        # The last cleanup removes the handlers since they match
         current_event_count = len(real_session.event_handlers)
 
-        # This should pass - same key means overwrite
-        assert current_event_count == initial_event_count + handlers_per_sync, (
-            f"Event handlers should be bounded when reusing keys. "
-            f"Expected {initial_event_count + handlers_per_sync}, got {current_event_count}"
+        assert current_event_count == initial_event_count, (
+            f"Event handlers should be cleaned up after each iteration. "
+            f"Expected {initial_event_count}, got {current_event_count}"
         )
 
 
@@ -376,7 +415,8 @@ class TestSyncKeyPrefixWithCleanup:
 
     def test_prefixed_sync_handlers_accumulate(self, real_session: Session):
         """
-        Test that syncs created within key scopes also accumulate handlers.
+        Test that syncs created within key scopes accumulate handlers,
+        and that they are cleaned up when the Sync objects are garbage collected.
         """
         from ws_sync.sync import sync_key_scope
 
@@ -387,12 +427,12 @@ class TestSyncKeyPrefixWithCleanup:
             value: int = 0
 
         # Create syncs with different prefixes
+        # NOTE: We append directly to avoid loop variables keeping the last object alive
+        # (Python loop variables persist after the loop ends, preventing GC)
         syncs = []
         for prefix in ["user1", "user2", "user3"]:
             with sync_key_scope(prefix):
-                obj = SimpleObj()
-                sync = Sync.all(obj, "DATA", send_on_init=False)
-                syncs.append(sync)
+                syncs.append(Sync.all(SimpleObj(), "DATA", send_on_init=False))
 
         # Should have 3 * 6 = 18 new handlers (6 handlers per sync, 3 syncs)
         assert len(real_session.event_handlers) == initial_count + (
@@ -403,7 +443,6 @@ class TestSyncKeyPrefixWithCleanup:
         del syncs
         gc.collect()
 
-        # THIS WILL FAIL - handlers remain
         assert len(real_session.event_handlers) == initial_count
 
 
