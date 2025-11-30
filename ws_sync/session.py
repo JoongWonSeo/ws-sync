@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from asyncio import Lock
 from collections.abc import Callable
 from contextlib import suppress
@@ -10,6 +11,8 @@ from typing import Any, Self
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 from .utils import nonblock_call
+
+logger = logging.getLogger(__name__)
 
 # session context
 session_context: ContextVar[Session] = ContextVar("session_context")
@@ -25,7 +28,7 @@ class Session:
     It defines a simple state-syncing protocol between the frontend and the backend, every event being of type {type: str, data: any}.
     """
 
-    def __init__(self, logger: Logger | None = None):
+    def __init__(self, logger: Logger | None = logger):
         self.ws = None
         self.ws_lock = Lock()  # when multiple clients try to connect at the same time, we need to ensure that only one connection is established
         self.event_handlers: dict[str, Callable[..., Any]] = {}  # triggered on event
