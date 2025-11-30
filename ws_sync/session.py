@@ -35,6 +35,7 @@ class Session:
         self.logger = logger
         self.state: SessionState | None = None
         """user-assigned state associated with the session"""
+        self._tokens: list[Token[Session]] = []
 
     @property
     def is_connected(self) -> bool:
@@ -181,7 +182,8 @@ class Session:
 
     # ===== High-Level: Context Manager =====#
     def __enter__(self) -> Self:
-        self.token = session_context.set(self)
+        token = session_context.set(self)
+        self._tokens.append(token)
         return self
 
     def __exit__(
@@ -190,9 +192,9 @@ class Session:
         exc_value: BaseException | None,
         traceback: object,
     ):
-        if self.token:
-            session_context.reset(self.token)
-        self.token: Token[Session] | None = None
+        if self._tokens:
+            token = self._tokens.pop()
+            session_context.reset(token)
 
 
 class SessionState:
