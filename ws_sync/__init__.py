@@ -1,7 +1,3 @@
-"""
-.. include:: ../README.md
-"""
-
 __all__ = [  # noqa: RUF022
     # submodules
     "decorators",
